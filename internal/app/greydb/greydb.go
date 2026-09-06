@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mikey-austin/greyd-golang/internal/cli"
 	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
 	"github.com/mikey-austin/greyd-golang/internal/grey"
@@ -86,53 +87,30 @@ func parseArgs(args []string) (options, bool) {
 		configFile: version.DefaultConfig,
 		opts:       config.New(),
 	}
-	i := 0
-	for i < len(args) {
-		arg := args[i]
-		if arg == "--" {
-			i++
-			break
-		}
-		if len(arg) < 2 || arg[0] != '-' {
-			break
-		}
-		i++
-		for j := 1; j < len(arg); j++ {
-			switch arg[j] {
-			case 'a':
-				o.action = actionAdd
-			case 'd':
-				o.action = actionDel
-			case 't':
-				o.typ = typeTraphit
-			case 'T':
-				o.typ = typeSpamtrap
-			case 'D':
-				o.typ = typeDomain
-			case 'f', 'Y':
-				var val string
-				if j+1 < len(arg) {
-					val = arg[j+1:]
-				} else {
-					if i >= len(args) {
-						return o, false
-					}
-					val = args[i]
-					i++
-				}
-				if arg[j] == 'f' {
-					o.configFile = val
-				} else {
-					o.opts.AppendListStr("hosts", "sync", val)
-					o.syncSend++
-				}
-				j = len(arg)
-			default:
-				return o, false
-			}
+	opts, rest, err := cli.Parse("adtTDf:Y:", args)
+	if err != nil {
+		return o, false
+	}
+	for _, opt := range opts {
+		switch opt.Flag {
+		case 'a':
+			o.action = actionAdd
+		case 'd':
+			o.action = actionDel
+		case 't':
+			o.typ = typeTraphit
+		case 'T':
+			o.typ = typeSpamtrap
+		case 'D':
+			o.typ = typeDomain
+		case 'f':
+			o.configFile = opt.Arg
+		case 'Y':
+			o.opts.AppendListStr("hosts", "sync", opt.Arg)
+			o.syncSend++
 		}
 	}
-	o.keys = args[i:]
+	o.keys = rest
 	return o, true
 }
 

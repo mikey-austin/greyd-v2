@@ -23,6 +23,7 @@ import (
 	"net"
 	"strings"
 
+	"github.com/mikey-austin/greyd-golang/internal/cli"
 	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
 	"github.com/mikey-austin/greyd-golang/internal/logger"
@@ -46,41 +47,25 @@ type options struct {
 // usage message must be printed.
 func parseArgs(args []string) (options, error) {
 	o := options{configFile: version.DefaultConfig, greyonly: true}
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			if i+1 < len(args) {
-				return o, fmt.Errorf("unexpected argument %q", args[i+1])
-			}
-			return o, nil
-		}
-		if len(arg) < 2 || arg[0] != '-' {
-			return o, fmt.Errorf("unexpected argument %q", arg)
-		}
-		for j := 1; j < len(arg); j++ {
-			switch arg[j] {
-			case 'f':
-				rest := arg[j+1:]
-				if rest == "" {
-					i++
-					if i >= len(args) {
-						return o, fmt.Errorf("option -f requires an argument")
-					}
-					rest = args[i]
-				}
-				o.configFile = rest
-				j = len(arg)
-			case 'n':
-				o.dryrun = true
-			case 'd':
-				o.debug = true
-			case 'b':
-				o.greyonly = false
-			case 'D':
-				o.daemonize = true
-			default:
-				return o, fmt.Errorf("unknown option -%c", arg[j])
-			}
+	opts, rest, err := cli.Parse("f:bdDn", args)
+	if err != nil {
+		return o, err
+	}
+	if len(rest) != 0 {
+		return o, fmt.Errorf("unexpected argument %q", rest[0])
+	}
+	for _, opt := range opts {
+		switch opt.Flag {
+		case 'f':
+			o.configFile = opt.Arg
+		case 'n':
+			o.dryrun = true
+		case 'd':
+			o.debug = true
+		case 'b':
+			o.greyonly = false
+		case 'D':
+			o.daemonize = true
 		}
 	}
 	return o, nil

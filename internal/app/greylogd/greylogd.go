@@ -27,10 +27,10 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/mikey-austin/greyd-golang/internal/cli"
 	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
 	"github.com/mikey-austin/greyd-golang/internal/grey"
@@ -68,68 +68,38 @@ type Syncer interface {
 // at the first non-option argument.
 func ParseFlags(args []string) (Options, error) {
 	o := Options{ConfigFile: version.DefaultConfig, Opts: config.New()}
-
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			break
-		}
-		if len(arg) < 2 || arg[0] != '-' {
-			break
-		}
-
-		for j := 1; j < len(arg); j++ {
-			c := arg[j]
-			switch c {
-			case 'd':
-				o.Opts.SetInt("debug", "", 1)
-				continue
-			case 'I':
-				o.Opts.SetInt("track_outbound", "firewall", 0)
-				continue
-			case 'f', 'p', 'P', 'W', 'Y':
-				// Options taking an argument, handled below.
-			default:
-				return o, fmt.Errorf("invalid option -- '%c'", c)
+	opts, _, err := cli.Parse("dIW:Y:f:P:p:", args)
+	if err != nil {
+		return o, err
+	}
+	for _, opt := range opts {
+		switch opt.Flag {
+		case 'd':
+			o.Opts.SetInt("debug", "", 1)
+		case 'I':
+			o.Opts.SetInt("track_outbound", "firewall", 0)
+		case 'f':
+			o.ConfigFile = opt.Arg
+		case 'p':
+			n, err := opt.Int()
+			if err != nil {
+				return o, fmt.Errorf("invalid port %q", opt.Arg)
 			}
-
-			var val string
-			if j+1 < len(arg) {
-				val = arg[j+1:]
-			} else if i+1 < len(args) {
-				i++
-				val = args[i]
-			} else {
-				return o, fmt.Errorf("option requires an argument -- '%c'", c)
+			o.Opts.SetInt("port", "sync", n)
+		case 'P':
+			o.Opts.SetStr("greylogd_pidfile", "", opt.Arg)
+		case 'W':
+			// Convert hours to seconds.
+			hours, err := opt.Int()
+			if err != nil {
+				return o, fmt.Errorf("invalid white expiry %q", opt.Arg)
 			}
-
-			switch c {
-			case 'f':
-				o.ConfigFile = val
-			case 'p':
-				n, err := strconv.Atoi(val)
-				if err != nil {
-					return o, fmt.Errorf("invalid port %q", val)
-				}
-				o.Opts.SetInt("port", "sync", n)
-			case 'P':
-				o.Opts.SetStr("greylogd_pidfile", "", val)
-			case 'W':
-				// Convert hours to seconds.
-				hours, err := strconv.Atoi(val)
-				if err != nil {
-					return o, fmt.Errorf("invalid white expiry %q", val)
-				}
-				o.Opts.SetInt("white_expiry", "grey", hours*60*60)
-			case 'Y':
-				o.Opts.AppendListStr("hosts", "sync", val)
-				o.SyncSend++
-			}
-			// The argument consumed the rest of this token.
-			break
+			o.Opts.SetInt("white_expiry", "grey", hours*60*60)
+		case 'Y':
+			o.Opts.AppendListStr("hosts", "sync", opt.Arg)
+			o.SyncSend++
 		}
 	}
-
 	return o, nil
 }
 

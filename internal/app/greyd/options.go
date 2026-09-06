@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mikey-austin/greyd-golang/internal/cli"
 	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/smtp"
 	"github.com/mikey-austin/greyd-golang/internal/version"
@@ -50,61 +51,24 @@ type Options struct {
 	Hostname string
 }
 
-// optString lists the switches; a trailing ':' marks one taking an
-// argument (getopt "F456f:l:L:c:B:p:bdG:h:s:S:M:n:vw:y:Y:P:").
+// optString lists the switches (getopt "F456f:l:L:c:B:p:bdG:h:s:S:M:n:vw:y:Y:P:").
 const optString = "F456f:l:L:c:B:p:bdG:h:s:S:M:n:vw:y:Y:P:"
 
 // ParseFlags parses the switches. maxFiles bounds -B and -c.
 func ParseFlags(args []string, maxFiles int) (Options, error) {
 	o := Options{ConfigFile: version.DefaultConfig, Opts: config.New()}
-	opts := o.Opts
-
-	takesArg := map[byte]bool{}
-	for i := 0; i < len(optString); i++ {
-		c := optString[i]
-		if c == ':' {
-			continue
-		}
-		takesArg[c] = i+1 < len(optString) && optString[i+1] == ':'
+	opts, rest, err := cli.Parse(optString, args)
+	if err != nil {
+		return o, ErrUsage
 	}
-
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if a == "--" {
-			if i+1 < len(args) {
-				return o, ErrUsage
-			}
-			break
-		}
-		if len(a) < 2 || a[0] != '-' {
-			return o, ErrUsage
-		}
-		for j := 1; j < len(a); j++ {
-			c := a[j]
-			needs, ok := takesArg[c]
-			if !ok {
-				return o, ErrUsage
-			}
-			var arg string
-			if needs {
-				if j+1 < len(a) {
-					arg = a[j+1:]
-				} else if i+1 < len(args) {
-					i++
-					arg = args[i]
-				} else {
-					return o, ErrUsage
-				}
-			}
-			if err := o.apply(c, arg, maxFiles); err != nil {
-				return o, err
-			}
-			if needs {
-				break
-			}
+	if len(rest) != 0 {
+		return o, ErrUsage
+	}
+	for _, opt := range opts {
+		if err := o.apply(opt.Flag, opt.Arg, maxFiles); err != nil {
+			return o, err
 		}
 	}
-	_ = opts
 	return o, nil
 }
 
