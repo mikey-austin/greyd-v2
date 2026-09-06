@@ -181,16 +181,23 @@ type Entry struct {
 // packets.
 var ErrTruncated = errors.New("truncated or invalid packet")
 
+// Packet is a decoded, authenticated synchronisation packet.
+type Packet struct {
+	Counter uint32
+	Entries []Entry
+}
+
 // Decode validates and parses a packet.
-func Decode(k *Key, pkt []byte) ([]Entry, error) {
+func Decode(k *Key, pkt []byte) (Packet, error) {
 	if len(pkt) < hdrLen || pkt[0] != Version || pkt[1] != afInet {
-		return nil, ErrTruncated
+		return Packet{}, ErrTruncated
 	}
 	length := int(binary.BigEndian.Uint16(pkt[2:]))
 	if len(pkt) < length || length < hdrLen {
-		return nil, ErrTruncated
+		return Packet{}, ErrTruncated
 	}
 	pkt = pkt[:length]
+	out := Packet{Counter: binary.BigEndian.Uint32(pkt[4:])}
 
 	var got [HMACLen]byte
 	copy(got[:], pkt[8:8+HMACLen])
@@ -202,34 +209,33 @@ func Decode(k *Key, pkt []byte) ([]Entry, error) {
 	mac := hmac.New(sha1.New, k[:])
 	mac.Write(buf)
 	if !hmac.Equal(got[:], mac.Sum(nil)) {
-		return nil, ErrTruncated
+		return Packet{}, ErrTruncated
 	}
 
-	var entries []Entry
 	p := buf[hdrLen:]
 	for len(p) > 0 {
 		if len(p) < tlvHdrLen {
-			return nil, ErrTruncated
+			return Packet{}, ErrTruncated
 		}
 		typ := binary.BigEndian.Uint16(p[0:])
 		tl := int(binary.BigEndian.Uint16(p[2:]))
 		if tl < tlvHdrLen || len(p) < tl {
-			return nil, ErrTruncated
+			return Packet{}, ErrTruncated
 		}
 
 		switch typ {
 		case TypeGrey:
 			if tl < greyHdrLen {
-				return nil, ErrTruncated
+				return Packet{}, ErrTruncated
 			}
 			fromLen := int(binary.BigEndian.Uint16(p[12:]))
 			toLen := int(binary.BigEndian.Uint16(p[14:]))
 			heloLen := int(binary.BigEndian.Uint16(p[16:]))
 			if greyHdrLen+fromLen+toLen+heloLen > tl {
-				return nil, ErrTruncated
+				return Packet{}, ErrTruncated
 			}
 			s := p[greyHdrLen:]
-			entries = append(entries, Entry{
+			out.Entries = append(out.Entries, Entry{
 				Type: typ,
 				IP:   netip.AddrFrom4([4]byte(p[8:12])),
 				From: cstr(s[:fromLen]),
@@ -239,9 +245,9 @@ func Decode(k *Key, pkt []byte) ([]Entry, error) {
 
 		case TypeWhite, TypeDelWhite, TypeTrapped, TypeDelTrapped:
 			if tl != addrLen {
-				return nil, ErrTruncated
+				return Packet{}, ErrTruncated
 			}
-			entries = append(entries, Entry{
+			out.Entries = append(out.Entries, Entry{
 				Type:   typ,
 				IP:     netip.AddrFrom4([4]byte(p[12:16])),
 				Expire: binary.BigEndian.Uint32(p[8:]),
@@ -249,14 +255,14 @@ func Decode(k *Key, pkt []byte) ([]Entry, error) {
 			})
 
 		case TypeEnd:
-			return entries, nil
+			return out, nil
 
 		default:
-			return entries, ErrTruncated
+			return out, ErrTruncated
 		}
 		p = p[tl:]
 	}
-	return entries, nil
+	return out, nil
 }
 
 func cstr(b []byte) string {

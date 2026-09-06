@@ -6,23 +6,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/mikey-austin/greyd-golang/adapters/db/memory"
-	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/config/parse"
 	"github.com/mikey-austin/greyd-golang/internal/core"
 	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/logger"
+	"github.com/mikey-austin/greyd-golang/internal/settings"
 )
 
-func init() {
-	_ = logger.Setup(logger.Options{Ident: "test", Stderr: io.Discard})
-}
+var ctx = context.Background()
 
 const testConf = `drop_privs = 0
 section grey {
@@ -41,6 +41,19 @@ section database {
   name   = "grey-test"
 }`
 
+func loadSettings(t *testing.T, src string) *settings.Settings {
+	t.Helper()
+	cfg, err := parse.String(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := settings.Load(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
 type tally struct {
 	entries, white, grey, trapped, spamtrap            int
 	whitePassed, whiteBlocked, greyPassed, greyBlocked int
@@ -48,37 +61,42 @@ type tally struct {
 
 func tallyStore(t *testing.T, s core.Store) tally {
 	t.Helper()
-	it, err := s.Iter(core.IterAll)
+	var ta tally
+	err := s.View(ctx, func(tx core.ReadTx) error {
+		it, err := tx.Iter(core.IterAll)
+		if err != nil {
+			return err
+		}
+		defer it.Close()
+		for {
+			k, d, ok, err := it.Next()
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
+			ta.entries++
+			switch k.Type {
+			case core.KeyIP:
+				if d.PCount == core.PCountTrapped {
+					ta.trapped++
+				} else {
+					ta.white++
+					ta.whitePassed += d.PCount
+					ta.whiteBlocked += d.BCount
+				}
+			case core.KeyTuple:
+				ta.grey++
+				ta.greyPassed += d.PCount
+				ta.greyBlocked += d.BCount
+			case core.KeyMail:
+				ta.spamtrap++
+			}
+		}
+	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	defer it.Close()
-	var ta tally
-	for {
-		k, d, ok, err := it.Next()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !ok {
-			break
-		}
-		ta.entries++
-		switch k.Type {
-		case core.KeyIP:
-			if d.PCount == core.PCountTrapped {
-				ta.trapped++
-			} else {
-				ta.white++
-				ta.whitePassed += d.PCount
-				ta.whiteBlocked += d.BCount
-			}
-		case core.KeyTuple:
-			ta.grey++
-			ta.greyPassed += d.PCount
-			ta.greyBlocked += d.BCount
-		case core.KeyMail:
-			ta.spamtrap++
-		}
 	}
 	return ta
 }
@@ -91,72 +109,89 @@ func writeAddr(w io.Writer, typ int, source, ip string, expires int64) {
 	fmt.Fprintf(w, "type = %d\nip = \"%s\"\nsource = \"%s\"\nexpires = \"%d\"\n%%%%\n", typ, ip, source, expires)
 }
 
-func newTestGreylister(t *testing.T, store core.Store, now time.Time, trapOut, fwOut io.Writer) (*Greylister, *config.Config) {
+func newTestGreylister(t *testing.T, store core.Store, now time.Time, trapOut, fwOut io.Writer) *Greylister {
 	t.Helper()
-	cfg, err := parse.String(testConf)
-	if err != nil {
-		t.Fatal(err)
-	}
 	g, err := New(Options{
-		Config:  cfg,
-		Store:   store,
-		TrapOut: trapOut,
-		FwOut:   fwOut,
-		Startup: now.Add(-120 * time.Second),
-		Now:     func() time.Time { return now },
+		Settings: loadSettings(t, testConf),
+		Store:    store,
+		TrapOut:  trapOut,
+		FwOut:    fwOut,
+		Startup:  now.Add(-120 * time.Second),
+		Now:      func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return g, cfg
+	return g
+}
+
+func mustGet(t *testing.T, s core.Store, k core.Key) (core.Data, bool) {
+	t.Helper()
+	d, found, err := core.Get(ctx, s, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d, found
 }
 
 func TestGreylisterSetup(t *testing.T) {
-	store := memory.New()
-	g, _ := newTestGreylister(t, store, time.Now(), nil, nil)
-	if g.TraplistName != "test traplist" || g.TraplistMsg != "you have been trapped" {
-		t.Fatalf("names %q %q", g.TraplistName, g.TraplistMsg)
+	g := newTestGreylister(t, memory.New(), time.Now(), nil, nil)
+	c := g.Config()
+	if c.TraplistName != "test traplist" || c.TraplistMessage != "you have been trapped" {
+		t.Fatalf("names %q %q", c.TraplistName, c.TraplistMessage)
 	}
-	if g.LowPrioMX != "192.179.21.3" {
-		t.Fatalf("low prio mx %q", g.LowPrioMX)
+	if c.LowPrioMX != "192.179.21.3" {
+		t.Fatalf("low prio mx %q", c.LowPrioMX)
 	}
 	if !reflect.DeepEqual(g.Domains, []string{"domain4.com", "domain2.com"}) {
 		t.Fatalf("domains %v", g.Domains)
 	}
-	if g.GreyExp != 3600 || g.WhiteExp != WhiteExp || g.TrapExp != TrapExp || g.PassTime != PassTime {
+	if c.GreyExpiry != 3600 || c.WhiteExpiry != WhiteExp || c.TrapExpiry != TrapExp || c.PassTime != PassTime {
 		t.Fatal("expiries")
 	}
-	if g.WhitelistName != WhiteName || g.WhitelistNameV6 != WhiteNameV6 {
+	if c.WhitelistName != WhiteName || c.WhitelistNameIPv6 != WhiteNameV6 {
 		t.Fatal("whitelist names")
+	}
+	if _, err := New(Options{}); err == nil {
+		t.Fatal("missing settings must error")
 	}
 }
 
 func TestLowPrioMXFallbackToDefaultSection(t *testing.T) {
-	cfg := config.New()
-	cfg.SetStr("low_prio_mx", "", "1.1.1.1")
-	g, err := New(Options{Config: cfg, Store: memory.New()})
-	if err != nil || g.LowPrioMX != "1.1.1.1" {
-		t.Fatalf("fallback %q %v", g.LowPrioMX, err)
-	}
-	if _, err := New(Options{}); err == nil {
-		t.Fatal("missing config must error")
+	s := loadSettings(t, "low_prio_mx = \"1.1.1.1\"\n")
+	g, err := New(Options{Settings: s, Store: memory.New()})
+	if err != nil || g.Config().LowPrioMX != "1.1.1.1" {
+		t.Fatalf("fallback %q %v", g.Config().LowPrioMX, err)
 	}
 }
 
 func TestLoadDomains(t *testing.T) {
-	d, err := LoadDomains("testdata/permitted_domains.txt")
+	d, err := LoadDomains("testdata/permitted_domains.txt", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(d, []string{"domain4.com", "domain2.com"}) {
 		t.Fatalf("domains %v", d)
 	}
-	if _, err := LoadDomains("testdata/missing"); err == nil {
+	if _, err := LoadDomains("testdata/missing", 0); err == nil {
 		t.Fatal("missing file must error")
+	}
+	d, err = LoadDomains("testdata/permitted_domains.txt", 1)
+	if !errors.Is(err, ErrTooManyDomains) || len(d) != 1 {
+		t.Fatalf("cap: %v %v", d, err)
 	}
 	if !domainMatches("@greyd.org", "beardedclams@greyd.org") || !domainMatches("obtuse.com", "stacy@snouts.obtuse.com") ||
 		domainMatches("@greyd.org", "peter@bugs.greyd.org") || !domainMatches("Domain.COM", "x@domain.com") {
 		t.Fatal("domainMatches")
+	}
+	// Over-limit files are warned about and leave Domains empty.
+	dir := t.TempDir()
+	big := filepath.Join(dir, "d.txt")
+	_ = os.WriteFile(big, []byte("a.com\nb.com\nc.com\n"), 0o644)
+	s := loadSettings(t, fmt.Sprintf("section grey { permitted_domains = %q, max_domains = 2 }", big))
+	g, _ := New(Options{Settings: s, Store: memory.New()})
+	if len(g.Domains) != 0 {
+		t.Fatalf("domains over the cap must not be partially loaded: %v", g.Domains)
 	}
 }
 
@@ -164,57 +199,45 @@ func TestLoadDomains(t *testing.T) {
 func TestReaderScenario(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	store := memory.New()
-	if err := store.Put(core.MailKey("trap@domain3.com"), core.Data{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Put(core.DomainKey("greyd@domain3.com"), core.Data{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Put(core.DomainKey("domain1.com"), core.Data{}); err != nil {
-		t.Fatal(err)
+	for _, k := range []core.Key{core.MailKey("trap@domain3.com"), core.DomainKey("greyd@domain3.com"), core.DomainKey("domain1.com")} {
+		if err := core.Put(ctx, store, k, core.Data{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	var trapOut, fwOut bytes.Buffer
-	g, _ := newTestGreylister(t, store, now, &trapOut, &fwOut)
+	g := newTestGreylister(t, store, now, &trapOut, &fwOut)
 
 	var in bytes.Buffer
 	exp := now.Unix() + 3600
-	// Grey entries and duplicates.
 	for range 2 {
 		writeGrey(&in, "2.3.4.5", "1.2.3.4", "jackiemclean.net", "m@jackiemclean.net", "r@domain1.com")
 		writeGrey(&in, "2.3.1.5", "1.2.4.4", "jackiemclean.net", "m@jackiemclean.net", "r@domain1.com")
 		writeGrey(&in, "2.3.2.5", "1.2.2.4", "jackiemclean.net", "m@jackiemclean.net", "r@domain1.com")
 	}
-	// White entries and duplicates.
 	for range 2 {
 		writeAddr(&in, ipc.MsgWhite, "2.3.4.5", "4.3.2.1", exp)
 		writeAddr(&in, ipc.MsgWhite, "2.3.4.6", "4.3.2.2", exp)
 		writeAddr(&in, ipc.MsgWhite, "2.3.4.7", "4.3.2.3", exp)
 	}
-	// Trap entries and duplicates.
 	for range 2 {
 		writeAddr(&in, ipc.MsgTrap, "3.2.4.5", "3.4.2.1", exp)
 		writeAddr(&in, ipc.MsgTrap, "3.2.4.6", "3.4.2.2", exp)
 		writeAddr(&in, ipc.MsgTrap, "3.2.4.7", "3.4.3.2", exp)
 	}
-	// Expired white and trap.
 	writeAddr(&in, ipc.MsgWhite, "8.8.8.3", "7.7.6.5", now.Unix()-3600)
 	writeAddr(&in, ipc.MsgTrap, "8.8.8.5", "7.7.6.6", now.Unix()-120)
-	// Explicit spamtrap in a permitted domain: trapped.
 	writeGrey(&in, "2.3.2.5", "1.2.2.4", "jackiemclean.net", "m@jackiemclean.net", "trap@domain3.com")
-	// Domain not permitted: trapped.
 	writeGrey(&in, "2.3.2.5", "1.2.2.4", "jackiemclean.net", "m@jackiemclean.net", "trap@willbetrapped.com")
-	// White entry with the same ip as an existing grey entry.
 	writeAddr(&in, ipc.MsgWhite, "2.3.4.7", "1.2.3.4", exp)
-	// Hit to the low priority MX.
 	writeGrey(&in, "192.179.21.3", "1.2.2.34", "jackiemclean.net", "m@jackiemclean.net", "notrap@domain4.com")
-	// A parse error stops the reader.
-	in.WriteString("==\n")
+	// A malformed frame is skipped, not fatal.
+	in.WriteString("==\n%%\n")
+	// An incomplete frame is skipped too.
+	in.WriteString("type = 1\nip = \"9.9.9.9\"\n%%\n")
 
-	err := g.RunReader(context.Background(), &in)
-	var pe *parse.Error
-	if !errors.As(err, &pe) {
-		t.Fatalf("expected parse error to stop the reader, got %v", err)
+	if err := g.RunReader(ctx, &in); err != nil {
+		t.Fatalf("RunReader: %v", err)
 	}
 
 	got := tallyStore(t, store)
@@ -222,27 +245,27 @@ func TestReaderScenario(t *testing.T) {
 	if got != want {
 		t.Fatalf("after reader: %+v\nwant %+v", got, want)
 	}
-	if st, _ := core.AddrState(store, "1.2.2.34"); st != 1 {
+	if d, _, _ := core.Get(ctx, store, core.IPKey("1.2.2.34")); d.PCount != core.PCountTrapped {
 		t.Fatal("low priority MX hit should be trapped")
 	}
 
 	// Simulate conditions for the scan.
 	tk := core.TupleKey(core.Tuple{IP: "1.2.2.4", Helo: "jackiemclean.net", From: "m@jackiemclean.net", To: "r@domain1.com"})
-	d, found, _ := store.Get(tk)
+	d, found := mustGet(t, store, tk)
 	if !found {
 		t.Fatal("tuple 1.2.2.4 missing")
 	}
 	d.Expire = now.Unix() - 120
-	_ = store.Put(tk, d)
+	_ = core.Put(ctx, store, tk, d)
 	tk.Tuple.IP = "1.2.4.4"
-	d, found, _ = store.Get(tk)
+	d, found = mustGet(t, store, tk)
 	if !found {
 		t.Fatal("tuple 1.2.4.4 missing")
 	}
 	d.Pass = now.Unix() - 60
-	_ = store.Put(tk, d)
+	_ = core.Put(ctx, store, tk, d)
 
-	if err := g.ScanOnce(); err != nil {
+	if err := g.ScanOnce(ctx); err != nil {
 		t.Fatalf("ScanOnce: %v", err)
 	}
 
@@ -250,10 +273,11 @@ func TestReaderScenario(t *testing.T) {
 	if err != nil {
 		t.Fatalf("whitelist message: %v", err)
 	}
-	if m.Str("type", "", "") != ipc.TypeReplace || m.Str("name", "", "") != WhiteName || m.Int("af", "", 0) != 4 {
-		t.Fatalf("whitelist frame %+v", fwOut.String())
+	rr, ok := m.(*ipc.ReplaceRequest)
+	if !ok || rr.Set != WhiteName || rr.AF != 4 {
+		t.Fatalf("whitelist frame %+v", m)
 	}
-	wl := m.StrList("ips", "")
+	wl := append([]string(nil), rr.IPs...)
 	sort.Strings(wl)
 	if !reflect.DeepEqual(wl, []string{"1.2.3.4", "1.2.4.4", "4.3.2.1", "4.3.2.2", "4.3.2.3"}) {
 		t.Fatalf("whitelist ips %v", wl)
@@ -263,12 +287,9 @@ func TestReaderScenario(t *testing.T) {
 	if err != nil {
 		t.Fatalf("traplist message: %v", err)
 	}
-	if m.Str("name", "", "_") != "test traplist" || m.Str("message", "", "_") != "you have been trapped" {
-		t.Fatalf("traplist frame %s", trapOut.String())
-	}
-	ips := m.StrList("ips", "")
-	if len(ips) != 5 {
-		t.Fatalf("traplist ips %v", ips)
+	bl, ok := m.(*ipc.BlacklistMessage)
+	if !ok || bl.Name != "test traplist" || bl.Message != "you have been trapped" || len(bl.IPs) != 5 {
+		t.Fatalf("traplist frame %+v", m)
 	}
 
 	got = tallyStore(t, store)
@@ -282,52 +303,46 @@ func TestPassTimeAndSync(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	store := memory.New()
 	rec := &recSyncer{}
-	cfg, _ := parse.String("section grey { pass_time = 100 }")
-	g, err := New(Options{Config: cfg, Store: store, Syncer: rec, Now: func() time.Time { return now }})
+	g, err := New(Options{Settings: loadSettings(t, "section grey { pass_time = 100 }"), Store: store, Syncer: rec, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	gt := core.Tuple{IP: "5.5.5.5", Helo: "h", From: "f@x.org", To: "t@y.org"}
-	if err := g.processGrey(gt, true, ""); err != nil {
+	if err := g.processGrey(ctx, gt, true, ""); err != nil {
 		t.Fatal(err)
 	}
-	d, _, _ := store.Get(core.TupleKey(gt))
+	d, _ := mustGet(t, store, core.TupleKey(gt))
 	if d.BCount != 1 || d.Pass != d.Expire || d.Pass != now.Unix()+GreyExp {
 		t.Fatalf("new entry %+v", d)
 	}
 	if len(rec.updates) != 1 {
 		t.Fatalf("sync updates %d", len(rec.updates))
 	}
-	// Retry before pass_time: pass unchanged.
 	now = now.Add(50 * time.Second)
-	if err := g.processGrey(gt, true, ""); err != nil {
+	if err := g.processGrey(ctx, gt, true, ""); err != nil {
 		t.Fatal(err)
 	}
-	d, _, _ = store.Get(core.TupleKey(gt))
+	d, _ = mustGet(t, store, core.TupleKey(gt))
 	if d.BCount != 2 || d.Pass == now.Unix() {
 		t.Fatalf("early retry %+v", d)
 	}
-	// Retry after pass_time: pass = now.
 	now = now.Add(60 * time.Second)
-	if err := g.processGrey(gt, true, ""); err != nil {
+	if err := g.processGrey(ctx, gt, true, ""); err != nil {
 		t.Fatal(err)
 	}
-	d, _, _ = store.Get(core.TupleKey(gt))
+	d, _ = mustGet(t, store, core.TupleKey(gt))
 	if d.BCount != 3 || d.Pass != now.Unix() {
 		t.Fatalf("late retry %+v", d)
 	}
-	// Messages from sync are not re-broadcast.
-	if err := g.processGrey(gt, false, ""); err != nil {
+	if err := g.processGrey(ctx, gt, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(rec.updates) != 3 {
 		t.Fatalf("sync updates %d", len(rec.updates))
 	}
-
-	// A trapped message announces a trapped entry.
-	_ = store.Put(core.MailKey("trap@z.org"), core.Data{})
+	_ = core.Put(ctx, store, core.MailKey("trap@z.org"), core.Data{})
 	gt.To = "trap@z.org"
-	if err := g.processGrey(gt, true, ""); err != nil {
+	if err := g.processGrey(ctx, gt, true, ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(rec.trapped) != 1 || rec.trapped[0] != "5.5.5.5" {
@@ -341,58 +356,58 @@ func TestSPFHandling(t *testing.T) {
 
 	run := func(res core.SPFResult, conf string) (core.Store, *Greylister) {
 		store := memory.New()
-		cfg, _ := parse.String(conf)
-		g, err := New(Options{Config: cfg, Store: store, SPF: fakeSPF{res: res}, Now: func() time.Time { return now }})
+		g, err := New(Options{Settings: loadSettings(t, conf), Store: store, SPF: fakeSPF{res: res}, Now: func() time.Time { return now }})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := g.processGrey(gt, true, ""); err != nil {
+		if err := g.processGrey(ctx, gt, true, ""); err != nil {
 			t.Fatal(err)
 		}
 		return store, g
 	}
+	state := func(s core.Store) int {
+		st := -1
+		_ = s.View(ctx, func(tx core.ReadTx) error {
+			var err error
+			st, err = core.AddrState(tx, gt.IP)
+			return err
+		})
+		return st
+	}
+	hasTuple := func(s core.Store) bool { _, f := mustGet(t, s, core.TupleKey(gt)); return f }
 
-	store, _ := run(core.SPFFail, "")
-	if st, _ := core.AddrState(store, gt.IP); st != 1 {
+	if s, _ := run(core.SPFFail, ""); state(s) != 1 {
 		t.Fatal("SPF fail must trap")
 	}
-	store, _ = run(core.SPFSoftFail, "")
-	if st, _ := core.AddrState(store, gt.IP); st != 1 {
+	if s, _ := run(core.SPFSoftFail, ""); state(s) != 1 {
 		t.Fatal("SPF softfail must trap by default")
 	}
-	store, _ = run(core.SPFSoftFail, "section spf { trap_on_softfail = 0 }")
-	if _, found, _ := store.Get(core.TupleKey(gt)); !found {
+	if s, _ := run(core.SPFSoftFail, "section spf { trap_on_softfail = 0 }"); !hasTuple(s) {
 		t.Fatal("softfail with trapping disabled must greylist")
 	}
-	store, _ = run(core.SPFPass, "")
-	if _, found, _ := store.Get(core.TupleKey(gt)); !found {
+	if s, _ := run(core.SPFPass, ""); !hasTuple(s) {
 		t.Fatal("pass without whitelist_on_pass must greylist")
 	}
-	store, g := run(core.SPFPass, "section spf { whitelist_on_pass = 1 }")
-	if st, _ := core.AddrState(store, gt.IP); st != 2 {
+	s, g := run(core.SPFPass, "section spf { whitelist_on_pass = 1 }")
+	if state(s) != 2 {
 		t.Fatal("pass with whitelist_on_pass must whitelist")
 	}
-	d, _, _ := store.Get(core.IPKey(gt.IP))
-	if d.Expire != now.Unix()+g.WhiteExp {
+	if d, _ := mustGet(t, s, core.IPKey(gt.IP)); d.Expire != now.Unix()+g.Config().WhiteExpiry {
 		t.Fatalf("white expiry %+v", d)
 	}
-	store, _ = run(core.SPFNone, "")
-	if _, found, _ := store.Get(core.TupleKey(gt)); !found {
+	if s, _ := run(core.SPFNone, ""); !hasTuple(s) {
 		t.Fatal("none must greylist")
 	}
-	store, _ = run(core.SPFFail, "section spf { enable = 0 }")
-	if _, found, _ := store.Get(core.TupleKey(gt)); !found {
+	if s, _ := run(core.SPFFail, "section spf { enable = 0 }"); !hasTuple(s) {
 		t.Fatal("spf disabled must greylist")
 	}
-	// Spamtrap takes precedence over SPF.
-	store = memory.New()
-	_ = store.Put(core.MailKey(gt.To), core.Data{})
-	cfg, _ := parse.String("section spf { whitelist_on_pass = 1 }")
-	g, _ = New(Options{Config: cfg, Store: store, SPF: fakeSPF{res: core.SPFPass}, Now: func() time.Time { return now }})
-	if err := g.processGrey(gt, true, ""); err != nil {
+	store := memory.New()
+	_ = core.Put(ctx, store, core.MailKey(gt.To), core.Data{})
+	g, _ = New(Options{Settings: loadSettings(t, "section spf { whitelist_on_pass = 1 }"), Store: store, SPF: fakeSPF{res: core.SPFPass}, Now: func() time.Time { return now }})
+	if err := g.processGrey(ctx, gt, true, ""); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := core.AddrState(store, gt.IP); st != 1 {
+	if state(store) != 1 {
 		t.Fatal("spamtrap must win over SPF pass")
 	}
 }
@@ -400,59 +415,52 @@ func TestSPFHandling(t *testing.T) {
 func TestNonGreyEdgeCases(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	store := memory.New()
-	cfg := config.New()
-	g, _ := New(Options{Config: cfg, Store: store, Now: func() time.Time { return now }})
+	g, _ := New(Options{Settings: loadSettings(t, ""), Store: store, Now: func() time.Time { return now }})
 
-	// Bad expiry is ignored.
-	if err := g.processNonGrey(false, "1.1.1.1", "src", "abc", true, false); err != nil {
+	if err := g.processNonGrey(ctx, false, "1.1.1.1", "src", "abc", true, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, _ := store.Get(core.IPKey("1.1.1.1")); found {
+	if _, found := mustGet(t, store, core.IPKey("1.1.1.1")); found {
 		t.Fatal("bad expiry must not create an entry")
 	}
-	// Deletion of a missing entry is fine, even with a bad expiry.
-	if err := g.processNonGrey(false, "1.1.1.1", "src", "", true, true); err != nil {
+	if err := g.processNonGrey(ctx, false, "1.1.1.1", "src", "", true, true); err != nil {
 		t.Fatal(err)
 	}
-	// Add then delete.
-	if err := g.processNonGrey(true, "1.1.1.1", "src", "12345", true, false); err != nil {
+	if err := g.processNonGrey(ctx, true, "1.1.1.1", "src", "12345", true, false); err != nil {
 		t.Fatal(err)
 	}
-	d, found, _ := store.Get(core.IPKey("1.1.1.1"))
+	d, found := mustGet(t, store, core.IPKey("1.1.1.1"))
 	if !found || d.PCount != core.PCountTrapped || d.Pass != 12345 || d.Expire != 12345 || d.First != now.Unix() {
 		t.Fatalf("trap entry %+v", d)
 	}
-	if err := g.processNonGrey(true, "1.1.1.1", "src", "0", true, true); err != nil {
+	if err := g.processNonGrey(ctx, true, "1.1.1.1", "src", "0", true, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, _ := store.Get(core.IPKey("1.1.1.1")); found {
+	if _, found := mustGet(t, store, core.IPKey("1.1.1.1")); found {
 		t.Fatal("entry should be deleted")
 	}
-
-	// Unknown message type.
-	m, _ := parse.String("type = 42\n")
-	if err := g.ProcessMessage(m); !errors.Is(err, ErrUnknownType) {
+	if err := g.ProcessMessage(ctx, &ipc.DstReply{}); !errors.Is(err, ErrUnknownType) {
 		t.Fatalf("unknown type: %v", err)
 	}
-	// Incomplete grey message is ignored.
-	m, _ = parse.String("type = 1\nip = \"1.2.3.4\"\n")
-	if err := g.ProcessMessage(m); err != nil {
-		t.Fatal(err)
+	// A cancelled context aborts processing.
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := g.processNonGrey(cctx, false, "2.2.2.2", "src", "99", true, false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled ctx: %v", err)
 	}
 }
 
 func TestRunScannerAndIPv6(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	store := memory.New()
-	_ = store.Put(core.IPKey("2001::1"), core.Data{First: 1, Pass: 1, Expire: now.Unix() + 100})
-	_ = store.Put(core.IPKey("1.1.1.1"), core.Data{First: 1, Pass: 1, Expire: now.Unix() + 100})
+	_ = core.Put(ctx, store, core.IPKey("2001::1"), core.Data{First: 1, Pass: 1, Expire: now.Unix() + 100})
+	_ = core.Put(ctx, store, core.IPKey("1.1.1.1"), core.Data{First: 1, Pass: 1, Expire: now.Unix() + 100})
 	fwOut, trapOut := &syncBuf{}, &syncBuf{}
-	cfg, _ := parse.String("enable_ipv6 = 1\n")
-	g, _ := New(Options{Config: cfg, Store: store, FwOut: fwOut, TrapOut: trapOut, Now: func() time.Time { return now }})
+	g, _ := New(Options{Settings: loadSettings(t, "enable_ipv6 = 1\n"), Store: store, FwOut: fwOut, TrapOut: trapOut, Now: func() time.Time { return now }})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	rctx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
-	go func() { done <- g.RunScanner(ctx, time.Hour) }()
+	go func() { done <- g.RunScanner(rctx, time.Hour) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for fwOut.Len() == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -462,15 +470,14 @@ func TestRunScannerAndIPv6(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := ipc.NewReader(bytes.NewReader(fwOut.Bytes()))
-	m1, err := r.Next()
-	if err != nil {
-		t.Fatal(err)
+	var names []string
+	for range 2 {
+		m, err := r.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, m.(*ipc.ReplaceRequest).Set)
 	}
-	m2, err := r.Next()
-	if err != nil {
-		t.Fatal(err)
-	}
-	names := []string{m1.Str("name", "", ""), m2.Str("name", "", "")}
 	sort.Strings(names)
 	if !reflect.DeepEqual(names, []string{WhiteName, WhiteNameV6}) {
 		t.Fatalf("frames %v", names)
@@ -478,9 +485,11 @@ func TestRunScannerAndIPv6(t *testing.T) {
 	if trapOut.Len() != 0 {
 		t.Fatal("empty traplist must not be sent")
 	}
+	if !strings.Contains(string(fwOut.Bytes()), "2001::1") {
+		t.Fatal("v6 whitelist missing")
+	}
 }
 
-// syncBuf is a goroutine safe bytes.Buffer.
 type syncBuf struct {
 	mu  sync.Mutex
 	buf bytes.Buffer

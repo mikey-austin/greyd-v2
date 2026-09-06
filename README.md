@@ -136,6 +136,13 @@ these corners:
   * a malformed message on an internal pipe or the configuration socket is logged and skipped
     instead of terminating the process
 
+The port also adds a few hardening options, all off or generous by default so existing
+configurations behave as before: `config_socket` (a unix domain socket for **greyd-setup**
+checked against the peer's credentials), `max_config_frame`, `max_cons_per_source`,
+`max_line_length`, `max_domains`, `max_entries` and the sync `replay_window`. `greyd -t`
+checks a configuration file and `greyd --drivers` lists the compiled-in drivers. See
+**greyd.conf**(5).
+
 Licensing
 ---------
 

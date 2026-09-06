@@ -3,7 +3,6 @@ package sync
 import (
 	"bytes"
 	"encoding/binary"
-	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -12,14 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
 	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/logger"
+	"github.com/mikey-austin/greyd-golang/internal/settings"
 )
 
-func init() {
-	_ = logger.Setup(logger.Options{Ident: "test", Stderr: io.Discard})
+// syncCfg returns sync settings with the documented defaults applied.
+func syncCfg() settings.Sync {
+	return settings.Sync{Enable: true, Port: DefaultPort, TTL: DefaultTTL, Verify: true, Key: DefaultKey, McastAddress: MulticastAddr, ReplayWindow: 64}
 }
 
 func TestGreyRoundTrip(t *testing.T) {
@@ -36,14 +35,14 @@ func TestGreyRoundTrip(t *testing.T) {
 	if pkt[0] != Version || pkt[1] != afInet || binary.BigEndian.Uint16(pkt[2:]) != uint16(want) || binary.BigEndian.Uint32(pkt[4:]) != 5 {
 		t.Fatal("header fields")
 	}
-	entries, err := Decode(&k, pkt)
+	dec, err := Decode(&k, pkt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("entries %d", len(entries))
+	if len(dec.Entries) != 1 || dec.Counter != 5 {
+		t.Fatalf("decoded %+v", dec)
 	}
-	e := entries[0]
+	e := dec.Entries[0]
 	if e.Type != TypeGrey || e.IP != ip || e.Helo != "mx.example.org" || e.From != "a@b.c" || e.To != "d@e.f" || e.Delete {
 		t.Fatalf("entry %+v", e)
 	}
@@ -61,11 +60,11 @@ func TestAddrRoundTripAndTypes(t *testing.T) {
 		if len(pkt) != hdrLen+addrLen+endLen {
 			t.Fatalf("addr packet length %d", len(pkt))
 		}
-		entries, err := Decode(&k, pkt)
-		if err != nil || len(entries) != 1 {
-			t.Fatalf("decode %v %d", err, len(entries))
+		dec, err := Decode(&k, pkt)
+		if err != nil || len(dec.Entries) != 1 {
+			t.Fatalf("decode %v %d", err, len(dec.Entries))
 		}
-		e := entries[0]
+		e := dec.Entries[0]
 		if e.Type != tc.typ || e.Delete != tc.del || e.IP != ip || e.Expire != 200 {
 			t.Fatalf("entry %+v", e)
 		}
@@ -181,10 +180,58 @@ func TestLoadKey(t *testing.T) {
 }
 
 func TestEngineDisabled(t *testing.T) {
-	cfg := config.New()
-	e, err := New(cfg)
+	cfg := syncCfg()
+	cfg.Enable = false
+	e, err := New(cfg, true, nil)
 	if err != nil || e != nil {
 		t.Fatalf("disabled sync should yield nil engine: %v %v", e, err)
+	}
+}
+
+func TestReplayWindow(t *testing.T) {
+	e, err := New(syncCfg(), true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1)}
+	accept := func(c uint32) bool { return e.acceptCounter(from, c) }
+	for _, c := range []uint32{5, 6, 7} {
+		if !accept(c) {
+			t.Fatalf("counter %d should be accepted", c)
+		}
+	}
+	if accept(6) {
+		t.Fatal("duplicate must be rejected")
+	}
+	if !accept(4) {
+		t.Fatal("out of order within window must be accepted")
+	}
+	if accept(4) {
+		t.Fatal("second delivery within window must be rejected")
+	}
+	if !accept(1000) {
+		t.Fatal("jump ahead must be accepted")
+	}
+	if accept(900) {
+		t.Fatal("stale counter outside the window must be rejected")
+	}
+	if !accept(0) {
+		t.Fatal("small counter after a large one is a peer restart")
+	}
+	if !accept(1) || accept(1) {
+		t.Fatal("window restarts after peer restart")
+	}
+	// Other peers have independent windows.
+	other := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 2)}
+	if !e.acceptCounter(other, 6) {
+		t.Fatal("independent peer")
+	}
+	// Window disabled accepts everything.
+	cfg := syncCfg()
+	cfg.ReplayWindow = 0
+	e2, _ := New(cfg, true, nil)
+	if !e2.acceptCounter(from, 1) || !e2.acceptCounter(from, 1) {
+		t.Fatal("disabled window")
 	}
 }
 
@@ -194,12 +241,11 @@ func TestEngineUnicastExchange(t *testing.T) {
 	// on distinct ports.
 	recvPort := freePort(t)
 
-	rcfg := config.New()
-	rcfg.SetInt("enable", "sync", 1)
-	rcfg.SetInt("verify", "sync", 0)
-	rcfg.SetStr("bind_address", "sync", "127.0.0.1")
-	rcfg.SetInt("port", "sync", recvPort)
-	recv, err := New(rcfg)
+	rcfg := syncCfg()
+	rcfg.Verify = false
+	rcfg.BindAddress = "127.0.0.1"
+	rcfg.Port = recvPort
+	recv, err := New(rcfg, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,12 +254,11 @@ func TestEngineUnicastExchange(t *testing.T) {
 	}
 	defer recv.Stop()
 
-	scfg := config.New()
-	scfg.SetInt("enable", "sync", 1)
-	scfg.SetInt("verify", "sync", 0)
-	scfg.SetInt("port", "sync", recvPort)
-	scfg.AppendListStr("hosts", "sync", "127.0.0.1")
-	send, err := New(scfg)
+	scfg := syncCfg()
+	scfg.Verify = false
+	scfg.Port = recvPort
+	scfg.Hosts = []string{"127.0.0.1"}
+	send, err := New(scfg, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,23 +287,24 @@ func TestEngineUnicastExchange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Int("type", "", 0) != ipc.MsgWhite || m.Int("sync", "", 1) != 0 || m.Str("ip", "", "") != "1.2.3.4" ||
-		m.Str("source", "", "") != "127.0.0.1" || m.Str("expires", "", "") != strconv.FormatInt(now.Add(time.Hour).Unix(), 10) || m.Int("delete", "", 1) != 0 {
+	w, ok := m.(*ipc.AddrMessage)
+	if !ok || w.Type != ipc.MsgWhite || w.Sync || w.IP != "1.2.3.4" ||
+		w.Source != "127.0.0.1" || w.Expires != strconv.FormatInt(now.Add(time.Hour).Unix(), 10) || w.Delete {
 		t.Fatalf("white message %s", out.String())
 	}
 	m, err = r.Next()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Int("type", "", 0) != ipc.MsgTrap || m.Str("ip", "", "") != "5.6.7.8" || m.Int("delete", "", 0) != 1 {
+	if tr, ok := m.(*ipc.AddrMessage); !ok || tr.Type != ipc.MsgTrap || tr.IP != "5.6.7.8" || !tr.Delete {
 		t.Fatalf("trap message")
 	}
 	m, err = r.Next()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Int("type", "", 0) != ipc.MsgGrey || m.Int("sync", "", 1) != 0 || m.Str("ip", "", "") != "9.9.9.9" ||
-		m.Str("helo", "", "") != "h" || m.Str("from", "", "") != "f@x" || m.Str("to", "", "") != "t@y" {
+	if g, ok := m.(*ipc.GreyMessage); !ok || g.Sync ||
+		g.Tuple != (core.Tuple{IP: "9.9.9.9", Helo: "h", From: "f@x", To: "t@y"}) {
 		t.Fatalf("grey message")
 	}
 }
@@ -270,16 +316,15 @@ func TestEngineKeyMismatchIsIgnored(t *testing.T) {
 		t.Fatal(err)
 	}
 	recvPort := freePort(t)
-	rcfg := config.New()
-	rcfg.SetInt("enable", "sync", 1)
-	rcfg.SetStr("key", "sync", keyPath)
-	rcfg.SetStr("bind_address", "sync", "127.0.0.1")
-	rcfg.SetInt("port", "sync", recvPort)
-	recv, err := New(rcfg)
+	rcfg := syncCfg()
+	rcfg.Key = keyPath
+	rcfg.BindAddress = "127.0.0.1"
+	rcfg.Port = recvPort
+	recv, err := New(rcfg, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recv.key == (Key{}) {
+	if recv.key == (Key{}) || !recv.Keyed() {
 		t.Fatal("key should be loaded")
 	}
 	if err := recv.Start(); err != nil {
@@ -287,12 +332,11 @@ func TestEngineKeyMismatchIsIgnored(t *testing.T) {
 	}
 	defer recv.Stop()
 
-	scfg := config.New()
-	scfg.SetInt("enable", "sync", 1)
-	scfg.SetInt("verify", "sync", 0) // zero key: signatures will not match
-	scfg.SetInt("port", "sync", recvPort)
-	scfg.AppendListStr("hosts", "sync", "127.0.0.1")
-	send, err := New(scfg)
+	scfg := syncCfg()
+	scfg.Verify = false // zero key: signatures will not match
+	scfg.Port = recvPort
+	scfg.Hosts = []string{"127.0.0.1"}
+	send, err := New(scfg, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,12 +357,11 @@ func TestEngineKeyMismatchIsIgnored(t *testing.T) {
 }
 
 func TestStartErrors(t *testing.T) {
-	cfg := config.New()
-	cfg.SetInt("enable", "sync", 1)
-	cfg.SetInt("verify", "sync", 0)
-	cfg.AppendListStr("hosts", "sync", "no-such-interface-xyz")
-	cfg.SetStr("bind_address", "sync", "other-iface")
-	e, err := New(cfg)
+	cfg := syncCfg()
+	cfg.Verify = false
+	cfg.Hosts = []string{"no-such-interface-xyz"}
+	cfg.BindAddress = "other-iface"
+	e, err := New(cfg, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,24 +372,22 @@ func TestStartErrors(t *testing.T) {
 		t.Fatal("mismatched interfaces must fail")
 	}
 
-	cfg = config.New()
-	cfg.SetInt("enable", "sync", 1)
-	cfg.SetInt("verify", "sync", 0)
-	cfg.SetStr("bind_address", "sync", "no-such-interface-xyz:abc")
-	e, _ = New(cfg)
+	cfg = syncCfg()
+	cfg.Verify = false
+	cfg.BindAddress = "no-such-interface-xyz:abc"
+	e, _ = New(cfg, true, nil)
 	if err := e.Start(); err == nil {
 		t.Fatal("invalid ttl must fail")
 	}
-	cfg.SetStr("bind_address", "sync", "no-such-interface-xyz")
-	e, _ = New(cfg)
+	cfg.BindAddress = "no-such-interface-xyz"
+	e, _ = New(cfg, true, nil)
 	if err := e.Start(); err == nil {
 		t.Fatal("unknown interface must fail")
 	}
 
-	cfg = config.New()
-	cfg.SetInt("enable", "sync", 1)
-	cfg.SetStr("key", "sync", filepath.Join(t.TempDir())) // a directory: read error
-	if _, err := New(cfg); err == nil {
+	cfg = syncCfg()
+	cfg.Key = t.TempDir() // a directory: read error
+	if _, err := New(cfg, true, nil); err == nil {
 		t.Fatal("unreadable key must fail")
 	}
 }

@@ -24,7 +24,6 @@ import (
 
 	"github.com/mikey-austin/greyd-golang/internal/core"
 	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/logger"
 )
 
 // match reports whether the input starts with the command (case
@@ -103,9 +102,9 @@ func (c *Conn) NextState() {
 					st = StateBannerIn
 					continue
 				case err == ErrProxyUnknown:
-					logger.Debug("UNKNOWN proxy protocol header encountered; refusing to continue")
+					c.log.Debug("UNKNOWN proxy protocol header encountered; refusing to continue")
 				default:
-					logger.Warning("invalid proxy protocol header; %v", err)
+					c.log.Warn("invalid proxy protocol header", "err", err)
 				}
 			}
 			st = StateReply
@@ -181,16 +180,16 @@ func (c *Conn) NextState() {
 					if c.black {
 						kind = "BLACK"
 					}
-					logger.Debug("(%s) %s: %s -> %s", kind, c.SrcAddr, c.Mail, c.Rcpt)
+					c.log.Debug("envelope", "kind", kind, "from", c.Mail, "to", c.Rcpt)
 					if c.cfg.Greylist && !c.black && c.deps.GreyOut != nil {
 						// Send this information to the greylister.
 						c.lookupOrigDst()
 						if err := ipc.WriteGrey(c.deps.GreyOut, c.DstAddr, c.SrcAddr, c.Helo, c.Mail, c.Rcpt); err != nil {
-							logger.Warning("could not send grey entry: %v", err)
+							c.log.Warn("could not send grey entry", "err", err)
 						}
 					}
 				} else {
-					logger.Debug("incomplete sender and/or recipient; not sending to greylister")
+					c.log.Debug("incomplete sender and/or recipient; not sending to greylister")
 				}
 				return
 			}
@@ -264,9 +263,9 @@ func (c *Conn) NextState() {
 					c.dataBody = true
 				}
 				if c.cfg.Verbose && c.dataBody && line != "" {
-					logger.Info("%s: Body: %s", c.SrcAddr, line)
+					c.log.Info("body", "line", line)
 				} else if c.cfg.Verbose && (match(line, "FROM:") || match(line, "TO:") || match(line, "SUBJECT:")) {
-					logger.Info("%s: %s", c.SrcAddr, line)
+					c.log.Info("header", "line", line)
 				}
 			}
 			c.setRead()
@@ -285,7 +284,7 @@ func (c *Conn) NextState() {
 			return
 
 		default:
-			logger.Error("illegal state %d", st)
+			c.log.Error("illegal state", "state", st)
 			c.Close()
 			return
 		}
@@ -297,7 +296,7 @@ func (c *Conn) allowProxy() bool {
 	if c.cfg.PermittedProxies != nil && c.cfg.PermittedProxies.Match(c.Src.Addr()) {
 		return true
 	}
-	logger.Warning("rejecting unknown proxy -> %s", c.Src.Addr().Unmap())
+	c.log.Warn("rejecting unknown proxy", "proxy", c.Src.Addr().Unmap())
 	return false
 }
 

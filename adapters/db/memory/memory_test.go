@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"testing"
 
 	"github.com/mikey-austin/greyd-golang/adapters/db/dbtest"
@@ -12,7 +13,7 @@ import (
 func TestConformance(t *testing.T) {
 	dbtest.RunConformance(t, func(t *testing.T) core.Store {
 		s := New()
-		if err := s.Open(core.OpenRW); err != nil {
+		if err := s.Open(context.Background(), core.OpenRW); err != nil {
 			t.Fatal(err)
 		}
 		return s
@@ -21,20 +22,27 @@ func TestConformance(t *testing.T) {
 
 func TestNamedDatabasesShare(t *testing.T) {
 	Reset("shared")
+	ctx := context.Background()
 	a := Open("shared")
 	b := Open("shared")
-	if err := a.Put(core.IPKey("1.1.1.1"), core.Data{First: 1}); err != nil {
+	if err := core.Put(ctx, a, core.IPKey("1.1.1.1"), core.Data{First: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, _ := b.Get(core.IPKey("1.1.1.1")); !found {
+	if _, found, _ := core.Get(ctx, b, core.IPKey("1.1.1.1")); !found {
 		t.Fatal("named databases should share data")
 	}
 	Reset("shared")
-	if _, found, _ := Open("shared").Get(core.IPKey("1.1.1.1")); found {
+	if _, found, _ := core.Get(ctx, Open("shared"), core.IPKey("1.1.1.1")); found {
 		t.Fatal("Reset should drop data")
 	}
-	if _, found, _ := New().Get(core.IPKey("1.1.1.1")); found {
+	if _, found, _ := core.Get(ctx, New(), core.IPKey("1.1.1.1")); found {
 		t.Fatal("New() must be private")
+	}
+	// Read-only stores refuse writes.
+	ro := Open("shared")
+	_ = ro.Open(ctx, core.OpenRO)
+	if err := core.Put(ctx, ro, core.IPKey("2.2.2.2"), core.Data{}); err != core.ErrReadOnly {
+		t.Fatalf("read-only Put: %v", err)
 	}
 }
 
@@ -47,10 +55,10 @@ func TestRegisteredFactory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put(core.MailKey("t@x.org"), core.Data{}); err != nil {
+	if err := core.Put(context.Background(), s, core.MailKey("t@x.org"), core.Data{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, _ := Open("factory-test").Get(core.MailKey("t@x.org")); !found {
+	if _, found, _ := core.Get(context.Background(), Open("factory-test"), core.MailKey("t@x.org")); !found {
 		t.Fatal("factory should open the named database")
 	}
 }

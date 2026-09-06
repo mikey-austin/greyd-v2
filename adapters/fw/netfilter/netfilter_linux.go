@@ -35,6 +35,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"sync"
 	"time"
@@ -75,8 +76,8 @@ const (
 )
 
 func init() {
-	core.RegisterFirewall(DriverName, func(cfg *config.Config) (core.Firewall, error) {
-		return New(cfg), nil
+	core.RegisterFirewall(DriverName, func(cfg *config.Config, opts core.FirewallOptions) (core.Firewall, error) {
+		return New(cfg, opts), nil
 	})
 }
 
@@ -104,6 +105,7 @@ func parseOptions(cfg *config.Config) options {
 // Firewall is the netfilter driver.
 type Firewall struct {
 	opts options
+	log  *slog.Logger
 
 	mu      sync.Mutex
 	logs    []*nflog.Nflog
@@ -112,23 +114,23 @@ type Firewall struct {
 }
 
 // New creates a netfilter firewall from the configuration; call Open
-// before use.
-func New(cfg *config.Config) *Firewall {
-	return &Firewall{opts: parseOptions(cfg)}
+// before use. A nil opts.Log discards diagnostics.
+func New(cfg *config.Config, opts core.FirewallOptions) *Firewall {
+	return &Firewall{opts: parseOptions(cfg), log: logger.Or(opts.Log)}
 }
 
 // Open prepares the handle while the process is still privileged. Netlink
 // sockets are opened per operation, so all that is needed is to arrange for
 // CAP_NET_ADMIN to survive the coming uid change (Mod_fw_open).
-func (f *Firewall) Open() error {
+func (f *Firewall) Open(context.Context) error {
 	if !f.opts.dropPrivs {
 		return nil
 	}
 	caps := cap.GetProc()
 	if err := caps.SetFlag(cap.Permitted, true, cap.NET_ADMIN); err != nil {
-		logger.Warning("netfilter: cap set flag: %v", err)
+		f.log.Warn("netfilter: cap set flag", "err", err)
 	} else if err := caps.SetProc(); err != nil {
-		logger.Warning("netfilter: cap set proc: %v", err)
+		f.log.Warn("netfilter: cap set proc", "err", err)
 	}
 	if err := unix.Prctl(unix.PR_SET_KEEPCAPS, 1, 0, 0, 0); err != nil {
 		return fmt.Errorf("prctl PR_SET_KEEPCAPS: %w", err)
@@ -162,15 +164,15 @@ func (f *Firewall) raiseCaps() {
 	}
 	caps := cap.NewSet()
 	if err := caps.SetFlag(cap.Permitted, true, cap.NET_ADMIN); err != nil {
-		logger.Warning("netfilter: cap set flag: %v", err)
+		f.log.Warn("netfilter: cap set flag", "err", err)
 		return
 	}
 	if err := caps.SetFlag(cap.Effective, true, cap.NET_ADMIN); err != nil {
-		logger.Warning("netfilter: cap set flag: %v", err)
+		f.log.Warn("netfilter: cap set flag", "err", err)
 		return
 	}
 	if err := caps.SetProc(); err != nil {
-		logger.Warning("netfilter: could not raise CAP_NET_ADMIN: %v", err)
+		f.log.Warn("netfilter: could not raise CAP_NET_ADMIN", "err", err)
 	}
 }
 
@@ -219,8 +221,14 @@ func cidrEntry(cidr string, af core.Family) (*netlink.IPSetEntry, error) {
 }
 
 // Replace builds the new contents in a staging set and swaps it in
-// atomically (Mod_fw_replace).
-func (f *Firewall) Replace(set string, cidrs []string, af core.Family) (int, error) {
+// atomically (Mod_fw_replace). Each ipset netlink request is a blocking
+// syscall that cannot itself be interrupted, so ctx is checked between
+// requests; when it is done the staging set is destroyed and the live set
+// left untouched.
+func (f *Firewall) Replace(ctx context.Context, set string, cidrs []string, af core.Family) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return -1, err
+	}
 	stage := set + stageSuffix
 	family := ipsetFamily(af)
 
@@ -238,6 +246,10 @@ func (f *Firewall) Replace(set string, cidrs []string, af core.Family) (int, err
 		if cidr == "" {
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			_ = netlink.IpsetDestroy(stage)
+			return -1, err
+		}
 		entry, err := cidrEntry(cidr, af)
 		if err == nil {
 			err = netlink.IpsetAdd(stage, entry)
@@ -249,10 +261,15 @@ func (f *Firewall) Replace(set string, cidrs []string, af core.Family) (int, err
 		added++
 	}
 
+	if err := ctx.Err(); err != nil {
+		_ = netlink.IpsetDestroy(stage)
+		return -1, err
+	}
+
 	// Make sure the live set exists so that the swap has a partner; an
 	// existing set is left alone.
 	if err := f.ipsetCreate(set, family); err != nil {
-		logger.Warning("netfilter: ipset create %s: %v", set, err)
+		f.log.Warn("netfilter: ipset create", "set", set, "err", err)
 	}
 
 	if err := netlink.IpsetSwap(set, stage); err != nil {
@@ -267,10 +284,14 @@ func (f *Firewall) Replace(set string, cidrs []string, af core.Family) (int, err
 }
 
 // StartLogCapture binds the NFLOG groups (Mod_fw_start_log_capture). A
-// single group receives both IPv4 and IPv6 packets.
-func (f *Firewall) StartLogCapture() error {
+// single group receives both IPv4 and IPv6 packets. The receive goroutines
+// run until EndLogCapture is called or ctx is done, whichever comes first.
+func (f *Firewall) StartLogCapture(ctx context.Context) error {
 	if f.opts.trackOutbound && f.opts.inboundGroup == f.opts.outboundGroup {
 		return errors.New("inbound and outbound NFLOG groups must not be the same")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	f.mu.Lock()
@@ -281,7 +302,7 @@ func (f *Firewall) StartLogCapture() error {
 
 	f.raiseCaps()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	entries := make(chan string, entryQueue)
 
 	var logs []*nflog.Nflog
@@ -322,7 +343,7 @@ func (f *Firewall) openGroup(ctx context.Context, group uint16, inbound bool, en
 		Copymode: nflog.CopyPacket,
 		Bufsize:  nflogBufsize,
 		Timeout:  nflogTimeout,
-		Logger:   nflogLogger{},
+		Logger:   nflogLogger{log: f.log},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("nflog open group %d: %w", group, err)
@@ -340,10 +361,10 @@ func (f *Firewall) openGroup(ctx context.Context, group uint16, inbound bool, en
 		saddr, sok := addrFromPacket(payload, true)
 		daddr, dok := addrFromPacket(payload, false)
 		if !sok || !dok {
-			logger.Warning("netfilter: invalid IP payload length of %d", len(payload))
+			f.log.Warn("netfilter: invalid IP payload length", "len", len(payload))
 			return 0
 		}
-		logger.Debug("packet received: direction = %s, saddr = %s, daddr = %s", direction, saddr, daddr)
+		f.log.Debug("packet received", "direction", direction, "saddr", saddr, "daddr", daddr)
 		addr := daddr
 		if inbound {
 			addr = saddr
@@ -351,7 +372,7 @@ func (f *Firewall) openGroup(ctx context.Context, group uint16, inbound bool, en
 		select {
 		case entries <- addr:
 		default:
-			logger.Warning("netfilter: log capture queue full, dropping %s", addr)
+			f.log.Warn("netfilter: log capture queue full, dropping entry", "addr", addr)
 		}
 		return 0
 	}
@@ -359,7 +380,7 @@ func (f *Firewall) openGroup(ctx context.Context, group uint16, inbound bool, en
 		if ctx.Err() != nil {
 			return 1
 		}
-		logger.Warning("netfilter: nflog group %d receive: %v", group, err)
+		f.log.Warn("netfilter: nflog receive", "group", group, "err", err)
 		return 0
 	}
 	if err := nf.RegisterWithErrorFunc(ctx, hook, errFunc); err != nil {
@@ -431,7 +452,13 @@ func (f *Firewall) CaptureLog(ctx context.Context) ([]string, error) {
 // destination address is taken from the returned flow; the port is the
 // proxy's, as in conntrack_callback. On any failure the proxy address is
 // returned, as in C.
-func (f *Firewall) LookupOrigDst(src, proxy netip.AddrPort) (netip.AddrPort, error) {
+//
+// conntrack.Conn exposes no deadline, so the connection is closed when ctx
+// is done, which unblocks a pending query; ctx.Err() is then returned.
+func (f *Firewall) LookupOrigDst(ctx context.Context, src, proxy netip.AddrPort) (netip.AddrPort, error) {
+	if err := ctx.Err(); err != nil {
+		return proxy, err
+	}
 	f.raiseCaps()
 
 	srcAddr := src.Addr().Unmap()
@@ -442,10 +469,12 @@ func (f *Firewall) LookupOrigDst(src, proxy netip.AddrPort) (netip.AddrPort, err
 
 	c, err := conntrack.Dial(nil)
 	if err != nil {
-		logger.Debug("netfilter: conntrack dial: %v", err)
+		f.log.Debug("netfilter: conntrack dial", "err", err)
 		return proxy, nil
 	}
 	defer c.Close()
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+	defer stop()
 
 	var flow conntrack.Flow
 	flow.TupleReply = conntrack.Tuple{
@@ -461,8 +490,11 @@ func (f *Firewall) LookupOrigDst(src, proxy netip.AddrPort) (netip.AddrPort, err
 	}
 
 	got, err := c.Get(flow)
+	if cerr := ctx.Err(); cerr != nil {
+		return proxy, cerr
+	}
 	if err != nil {
-		logger.Debug("netfilter: conntrack lookup %s -> %s: %v", src, proxy, err)
+		f.log.Debug("netfilter: conntrack lookup", "src", src, "proxy", proxy, "err", err)
 		return proxy, nil
 	}
 	origDst := got.TupleOrig.IP.DestinationAddress
@@ -473,7 +505,12 @@ func (f *Firewall) LookupOrigDst(src, proxy netip.AddrPort) (netip.AddrPort, err
 }
 
 // nflogLogger routes the library's internal messages to the greyd log.
-type nflogLogger struct{}
+type nflogLogger struct{ log *slog.Logger }
 
-func (nflogLogger) Debugf(format string, args ...any) { logger.Debug("nflog: "+format, args...) }
-func (nflogLogger) Errorf(format string, args ...any) { logger.Warning("nflog: "+format, args...) }
+func (l nflogLogger) Debugf(format string, args ...any) {
+	l.log.Debug("nflog: " + fmt.Sprintf(format, args...))
+}
+
+func (l nflogLogger) Errorf(format string, args ...any) {
+	l.log.Warn("nflog: " + fmt.Sprintf(format, args...))
+}

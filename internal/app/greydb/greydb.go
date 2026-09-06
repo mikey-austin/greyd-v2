@@ -20,6 +20,8 @@
 package greydb
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -29,9 +31,9 @@ import (
 	"github.com/mikey-austin/greyd-golang/internal/cli"
 	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
-	"github.com/mikey-austin/greyd-golang/internal/grey"
 	"github.com/mikey-austin/greyd-golang/internal/ip"
 	"github.com/mikey-austin/greyd-golang/internal/logger"
+	"github.com/mikey-austin/greyd-golang/internal/settings"
 	"github.com/mikey-austin/greyd-golang/internal/sync"
 	"github.com/mikey-austin/greyd-golang/internal/version"
 )
@@ -56,6 +58,10 @@ const (
 // nowFunc supplies the current time; tests replace it to obtain exact
 // timestamps. The C implementation captures time(NULL) once per update.
 var nowFunc = time.Now
+
+// errReported marks a transaction failure whose message has already been
+// written to stderr from inside the update closure.
+var errReported = errors.New("greydb: failure reported")
 
 // syncer is the subset of the sync engine used by db_update.
 type syncer interface {
@@ -132,21 +138,37 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	cfg.Merge(o.opts)
 
-	// Ensure syslog output is disabled.
+	// Ensure syslog output is disabled and that privileges are kept.
 	cfg.SetInt("syslog_enable", "", 0)
-	if err := logger.Setup(logger.Options{
-		Ident:  progName,
-		Debug:  cfg.Bool("debug", "", false),
-		Syslog: false,
-		Stderr: stderr,
-	}); err != nil {
+	cfg.SetInt("drop_privs", "", 0)
+
+	s, err := settings.Load(cfg)
+	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", progName, err)
 		return 1
 	}
 
-	cfg.SetInt("drop_privs", "", 0)
-	hostname, _ := os.Hostname()
-	store, err := core.OpenStore(cfg, core.StoreOptions{Hostname: cfg.Str("hostname", "", hostname)})
+	log, h, err := logger.New(logger.Options{
+		Ident:  progName,
+		Debug:  s.Debug,
+		Syslog: false,
+		Stderr: stderr,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", progName, err)
+		return 1
+	}
+	defer h.Close()
+	for _, w := range s.Warnings {
+		log.Warn(w)
+	}
+
+	ctx := context.Background()
+	hostname := s.Hostname
+	if hostname == "" {
+		hostname, _ = os.Hostname()
+	}
+	store, err := core.OpenStore(cfg, core.StoreOptions{Hostname: hostname, Log: log})
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", progName, err)
 		return 1
@@ -155,7 +177,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if o.action == actionList {
 		mode = core.OpenRO
 	}
-	if err := store.Open(mode); err != nil {
+	if err := store.Open(ctx, mode); err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", progName, err)
 		return 1
 	}
@@ -164,47 +186,42 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	var eng *sync.Engine
 	switch o.action {
 	case actionList:
-		ret = dbList(store, stdout, stderr)
+		ret = dbList(ctx, store, stdout, stderr)
 
 	case actionAdd, actionDel:
-		// Ensure that the sync bind address is not set.
-		cfg.Delete("bind_address", "sync")
+		// Ensure that the sync bind address is not set (send only).
+		s = s.WithoutSyncBind()
 
 		if o.syncSend == 0 {
-			if hosts := cfg.StrList("hosts", "sync"); len(hosts) > 0 {
-				o.syncSend += len(hosts)
-			}
+			o.syncSend += len(s.Sync.Hosts)
 		}
 
 		// Setup sync if enabled in configuration file.
 		if o.syncSend > 0 {
-			eng, err = sync.New(cfg)
+			eng, err = sync.New(s.Sync, s.Grey.Enable, log)
 			if eng == nil {
 				if err != nil {
-					logger.Warning("%v", err)
+					log.Warn("could not create sync engine", "err", err)
 				}
 				fmt.Fprintf(stderr, "%s: sync disabled by configuration\n", progName)
 				o.syncSend = 0
 			} else if err := eng.Start(); err != nil {
-				logger.Warning("could not start sync engine")
+				log.Warn("could not start sync engine", "err", err)
 				eng.Stop()
 				eng = nil
 				o.syncSend = 0
 			}
 		}
 
-		whiteExp := cfg.Int("white_expiry", "grey", grey.WhiteExp)
-		trapExp := cfg.Int("trap_expiry", "grey", grey.TrapExp)
-
-		var s syncer
+		var sy syncer
 		if eng != nil {
-			s = eng
+			sy = eng
 		}
 		c := 0
 		for _, k := range o.keys {
 			if k != "" {
 				c++
-				ret += dbUpdate(store, k, o.action, o.typ, s, int64(whiteExp), int64(trapExp), stderr)
+				ret += dbUpdate(ctx, store, k, o.action, o.typ, sy, s.Grey.WhiteExpiry, s.Grey.TrapExpiry, stderr)
 			}
 		}
 		if c == 0 {
@@ -225,56 +242,65 @@ func Run(args []string, stdout, stderr io.Writer) int {
 }
 
 // dbList prints every database entry (db_list).
-func dbList(store core.Store, stdout, stderr io.Writer) int {
-	it, err := store.Iter(core.IterAll)
+func dbList(ctx context.Context, store core.Store, stdout, stderr io.Writer) int {
+	err := store.View(ctx, func(tx core.ReadTx) error {
+		it, err := tx.Iter(core.IterAll)
+		if err != nil {
+			return err
+		}
+		defer it.Close()
+
+		for {
+			k, d, ok, err := it.Next()
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
+			printEntry(stdout, k, d)
+		}
+	})
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", progName, err)
 		return 1
 	}
-	defer it.Close()
+	return 0
+}
 
-	for {
-		k, d, ok, err := it.Next()
-		if err != nil {
-			fmt.Fprintf(stderr, "%s: %v\n", progName, err)
-			return 1
-		}
-		if !ok {
-			break
-		}
-		switch k.Type {
-		case core.KeyTuple:
-			// This is a greylist entry.
-			t := k.Tuple
-			fmt.Fprintf(stdout, "GREY|%s|%s|%s|%s|%d|%d|%d|%d|%d\n",
-				t.IP, t.Helo, t.From, t.To, d.First, d.Pass, d.Expire,
-				d.BCount, d.PCount)
+// printEntry writes one database entry in the greydb listing format.
+func printEntry(stdout io.Writer, k core.Key, d core.Data) {
+	switch k.Type {
+	case core.KeyTuple:
+		// This is a greylist entry.
+		t := k.Tuple
+		fmt.Fprintf(stdout, "GREY|%s|%s|%s|%s|%d|%d|%d|%d|%d\n",
+			t.IP, t.Helo, t.From, t.To, d.First, d.Pass, d.Expire,
+			d.BCount, d.PCount)
 
-		case core.KeyMail:
-			fmt.Fprintf(stdout, "SPAMTRAP|%s\n", k.Str)
+	case core.KeyMail:
+		fmt.Fprintf(stdout, "SPAMTRAP|%s\n", k.Str)
 
-		case core.KeyDomain:
-			fmt.Fprintf(stdout, "DOMAIN|%s\n", k.Str)
+	case core.KeyDomain:
+		fmt.Fprintf(stdout, "DOMAIN|%s\n", k.Str)
 
-		case core.KeyIP:
-			// We have a non-greylist entry.
-			switch d.PCount {
-			case core.PCountTrapped:
-				// Spamtrap hit, with expiry time.
-				fmt.Fprintf(stdout, "TRAPPED|%s|%d\n", k.Str, d.Expire)
-			default:
-				// Must be a whitelist entry.
-				fmt.Fprintf(stdout, "WHITE|%s|||%d|%d|%d|%d|%d\n", k.Str,
-					d.First, d.Pass, d.Expire, d.BCount, d.PCount)
-			}
+	case core.KeyIP:
+		// We have a non-greylist entry.
+		switch d.PCount {
+		case core.PCountTrapped:
+			// Spamtrap hit, with expiry time.
+			fmt.Fprintf(stdout, "TRAPPED|%s|%d\n", k.Str, d.Expire)
+		default:
+			// Must be a whitelist entry.
+			fmt.Fprintf(stdout, "WHITE|%s|||%d|%d|%d|%d|%d\n", k.Str,
+				d.First, d.Pass, d.Expire, d.BCount, d.PCount)
 		}
 	}
-	return 0
 }
 
 // dbUpdate adds or deletes a single entry (db_update). It returns 0 on
 // success and 1 on failure.
-func dbUpdate(store core.Store, key string, action, typ int, s syncer,
+func dbUpdate(ctx context.Context, store core.Store, key string, action, typ int, s syncer,
 	whiteExp, trapExp int64, stderr io.Writer) int {
 	warn := func(format string, a ...any) {
 		fmt.Fprintf(stderr, "%s: %s\n", progName, fmt.Sprintf(format, a...))
@@ -308,33 +334,27 @@ func dbUpdate(store core.Store, key string, action, typ int, s syncer,
 		return 1
 	}
 
-	if err := store.Begin(); err != nil {
-		warn("%v", err)
-		return 1
-	}
-	rollback := func() int {
-		_ = store.Rollback()
-		return 1
-	}
-
 	var d core.Data
-	if action == actionDel {
-		found, err := store.Del(k)
-		if err != nil {
-			warn("Deletion failed")
-			return rollback()
+	err := store.Update(ctx, func(tx core.Tx) error {
+		if action == actionDel {
+			found, err := tx.Del(k)
+			if err != nil {
+				warn("Deletion failed")
+				return errReported
+			}
+			if !found {
+				warn("No entry for %s", key)
+				return errReported
+			}
+			return nil
 		}
-		if !found {
-			warn("No entry for %s", key)
-			return rollback()
-		}
-	} else {
+
 		// Add a new entry.
 		var found bool
 		var err error
-		d, found, err = store.Get(k)
+		d, found, err = tx.Get(k)
 		if err != nil {
-			return rollback()
+			return errReported
 		}
 		if found {
 			// Update the existing entry in the database.
@@ -368,15 +388,18 @@ func dbUpdate(store core.Store, key string, action, typ int, s syncer,
 				d.PCount = core.PCountSpamtrap
 			}
 		}
-		if err := store.Put(k, d); err != nil {
+		if err := tx.Put(k, d); err != nil {
 			warn("Put failed")
-			return rollback()
+			return errReported
 		}
-	}
-
-	if err := store.Commit(); err != nil {
-		warn("%v", err)
-		return rollback()
+		return nil
+	})
+	if err != nil {
+		if !errors.Is(err, errReported) {
+			// Transaction begin or commit failure.
+			warn("%v", err)
+		}
+		return 1
 	}
 
 	if s != nil {

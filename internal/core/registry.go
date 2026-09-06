@@ -17,6 +17,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"sort"
@@ -114,7 +115,7 @@ func OpenStore(cfg *config.Config, opts StoreOptions) (Store, error) {
 
 // OpenFirewall constructs and opens the configured firewall driver
 // (FW_open).
-func OpenFirewall(cfg *config.Config) (Firewall, error) {
+func OpenFirewall(ctx context.Context, cfg *config.Config, opts FirewallOptions) (Firewall, error) {
 	sec := cfg.Section("firewall")
 	if sec == nil {
 		return nil, fmt.Errorf("could not find firewall configuration")
@@ -130,11 +131,11 @@ func OpenFirewall(cfg *config.Config) (Firewall, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown firewall driver %q (available: %s)", raw, strings.Join(FirewallDrivers(), ", "))
 	}
-	fw, err := f(cfg)
+	fw, err := f(cfg, opts)
 	if err != nil {
 		return nil, err
 	}
-	if err := fw.Open(); err != nil {
+	if err := fw.Open(ctx); err != nil {
 		return nil, fmt.Errorf("could not obtain firewall handle: %w", err)
 	}
 	return fw, nil

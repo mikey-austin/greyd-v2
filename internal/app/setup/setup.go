@@ -18,16 +18,21 @@
 package setup
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/mikey-austin/greyd-golang/internal/cli"
 	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
 	"github.com/mikey-austin/greyd-golang/internal/logger"
 	"github.com/mikey-austin/greyd-golang/internal/privs"
+	"github.com/mikey-austin/greyd-golang/internal/settings"
 	"github.com/mikey-austin/greyd-golang/internal/setup"
 	"github.com/mikey-austin/greyd-golang/internal/version"
 )
@@ -96,25 +101,39 @@ func Run(args []string, stderr io.Writer) int {
 	// Don't drop privileges.
 	cfg.SetInt("drop_privs", "", 0)
 
-	if len(cfg.StrList("lists", "setup")) == 0 {
-		fmt.Fprintf(stderr, "%s: no lists configured in %s\n", progName, o.configFile)
-		return 1
-	}
-
-	if err := logger.Setup(logger.Options{
-		Ident:  progName,
-		Debug:  o.debug || cfg.Bool("debug", "", false),
-		Syslog: cfg.Bool("syslog_enable", "", true),
-		File:   cfg.Str("log_to_file", "", ""),
-		Stderr: stderr,
-	}); err != nil {
+	s, err := settings.Load(cfg)
+	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", progName, err)
 		return 1
 	}
 
+	if len(s.Setup.Lists) == 0 {
+		fmt.Fprintf(stderr, "%s: no lists configured in %s\n", progName, o.configFile)
+		return 1
+	}
+
+	log, h, err := logger.New(logger.Options{
+		Ident:  progName,
+		Debug:  o.debug || s.Global.Debug,
+		Syslog: s.Global.SyslogEnable,
+		File:   s.Global.LogToFile,
+		Stderr: stderr,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", progName, err)
+		return 1
+	}
+	defer h.Close()
+	for _, w := range s.Warnings {
+		log.Warn(w)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	var fw core.Firewall
 	if !o.greyonly && !o.dryrun {
-		fw, err = core.OpenFirewall(cfg)
+		fw, err = core.OpenFirewall(ctx, cfg, core.FirewallOptions{Log: log})
 		if err != nil {
 			fmt.Fprintf(stderr, "%s: %v\n", progName, err)
 			return 1
@@ -122,14 +141,20 @@ func Run(args []string, stderr io.Writer) int {
 		defer fw.Close()
 	}
 
-	cfgPort := cfg.Int("config_port", "", setup.DefaultConfigPort)
-	dial := func() (net.Conn, error) { return setup.DialReserved(cfgPort) }
+	var dial setup.Dialer
+	if sock := s.Global.ConfigSocket; sock != "" {
+		dial = func() (net.Conn, error) { return setup.DialUnix(sock) }
+	} else {
+		cfgPort := s.Global.ConfigPort
+		dial = func() (net.Conn, error) { return setup.DialReserved(cfgPort) }
+	}
 
-	err = setup.Run(cfg, setup.Options{
+	err = setup.Run(ctx, s, setup.Options{
 		Dryrun:   o.dryrun,
 		Debug:    o.debug,
 		GreyOnly: o.greyonly,
 		Debugf:   func(format string, a ...any) { fmt.Fprintf(stderr, format, a...) },
+		Log:      log,
 	}, fw, dial)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %s\n", progName, strings.TrimSpace(err.Error()))

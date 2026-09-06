@@ -19,6 +19,7 @@
 package sqlite
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -26,9 +27,12 @@ import (
 	"time"
 
 	"github.com/mikey-austin/greyd-golang/adapters/db/dbtest"
+	"github.com/mikey-austin/greyd-golang/adapters/db/sqlcommon"
 	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
 )
+
+var ctx = context.Background()
 
 func testConfig(t *testing.T, dir string) *config.Config {
 	t.Helper()
@@ -39,17 +43,22 @@ func testConfig(t *testing.T, dir string) *config.Config {
 	return cfg
 }
 
-func openStore(t *testing.T, dir string) *Store {
+func openMode(t *testing.T, dir string, mode core.OpenMode) *Store {
 	t.Helper()
 	s, err := New(testConfig(t, dir), core.StoreOptions{Hostname: "test"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if err := s.Open(core.OpenRW); err != nil {
+	if err := s.Open(ctx, mode); err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+func openStore(t *testing.T, dir string) *Store {
+	t.Helper()
+	return openMode(t, dir, core.OpenRW)
 }
 
 func TestConformance(t *testing.T) {
@@ -86,14 +95,18 @@ func TestMissingParentFails(t *testing.T) {
 
 func TestOpenTwiceIsNoop(t *testing.T) {
 	s := openStore(t, t.TempDir())
-	if err := s.Put(core.IPKey("1.1.1.1"), core.Data{First: 1}); err != nil {
+	if err := core.Put(ctx, s, core.IPKey("1.1.1.1"), core.Data{First: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Open(core.OpenRO); err != nil {
+	if err := s.Open(ctx, core.OpenRO); err != nil {
 		t.Fatalf("second Open: %v", err)
 	}
-	if _, found, err := s.Get(core.IPKey("1.1.1.1")); err != nil || !found {
+	if _, found, err := core.Get(ctx, s, core.IPKey("1.1.1.1")); err != nil || !found {
 		t.Fatalf("entry lost across reopen: %v %v", found, err)
+	}
+	// The second Open did not turn the store read-only.
+	if err := core.Put(ctx, s, core.IPKey("1.1.1.2"), core.Data{}); err != nil {
+		t.Fatalf("Put after no-op reopen: %v", err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
@@ -101,23 +114,73 @@ func TestOpenTwiceIsNoop(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
-	if err := s.Put(core.IPKey("1.1.1.1"), core.Data{}); err == nil {
-		t.Fatal("Put on a closed store must fail")
+	if err := core.Put(ctx, s, core.IPKey("1.1.1.1"), core.Data{}); !errors.Is(err, core.ErrNotOpen) {
+		t.Fatalf("Put on a closed store = %v, want ErrNotOpen", err)
+	}
+	if err := s.View(ctx, func(core.ReadTx) error { return nil }); !errors.Is(err, core.ErrNotOpen) {
+		t.Fatalf("View on a closed store = %v, want ErrNotOpen", err)
+	}
+}
+
+func TestUnopenedStore(t *testing.T) {
+	s, err := New(testConfig(t, t.TempDir()), core.StoreOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(ctx, func(core.Tx) error { return nil }); !errors.Is(err, core.ErrNotOpen) {
+		t.Fatalf("Update before Open = %v, want ErrNotOpen", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close of an unopened store: %v", err)
 	}
 }
 
 func TestPersistence(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, dir)
-	if err := s.Put(core.MailKey("trap@x.org"), core.Data{}); err != nil {
+	if err := core.Put(ctx, s, core.MailKey("trap@x.org"), core.Data{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
 	s2 := openStore(t, dir)
-	if _, found, err := s2.Get(core.MailKey("trap@x.org")); err != nil || !found {
+	if _, found, err := core.Get(ctx, s2, core.MailKey("trap@x.org")); err != nil || !found {
 		t.Fatalf("data did not persist: %v %v", found, err)
+	}
+}
+
+func TestReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, dir)
+	if err := core.Put(ctx, s, core.IPKey("5.5.5.5"), core.Data{First: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ro := openMode(t, dir, core.OpenRO)
+	if d, found, err := core.Get(ctx, ro, core.IPKey("5.5.5.5")); err != nil || !found || d.First != 7 {
+		t.Fatalf("Get in RO = %+v %v %v", d, found, err)
+	}
+	called := false
+	err := ro.Update(ctx, func(core.Tx) error {
+		called = true
+		return nil
+	})
+	if !errors.Is(err, core.ErrReadOnly) {
+		t.Fatalf("Update on a read-only store = %v, want ErrReadOnly", err)
+	}
+	if called {
+		t.Fatal("Update must not run fn on a read-only store")
+	}
+	if err := core.Put(ctx, ro, core.IPKey("6.6.6.6"), core.Data{}); !errors.Is(err, core.ErrReadOnly) {
+		t.Fatalf("Put on a read-only store = %v, want ErrReadOnly", err)
+	}
+	// The read-only store is still usable for reads afterwards.
+	if _, found, err := core.Get(ctx, ro, core.IPKey("6.6.6.6")); err != nil || found {
+		t.Fatalf("Get after refused write = %v %v", found, err)
 	}
 }
 
@@ -130,15 +193,33 @@ func TestRegisteredFactory(t *testing.T) {
 	if _, ok := s.(*Store); !ok {
 		t.Fatalf("factory returned %T", s)
 	}
-	if err := s.Open(core.OpenRW); err != nil {
+	if err := s.Open(ctx, core.OpenRW); err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err := s.Put(core.DomainKey("x.org"), core.Data{}); err != nil {
+	if err := core.Put(ctx, s, core.DomainKey("x.org"), core.Data{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, _ := s.Get(core.DomainPartKey("a@x.org")); !found {
+	if _, found, _ := core.Get(ctx, s, core.DomainPartKey("a@x.org")); !found {
 		t.Fatal("domain part lookup")
+	}
+}
+
+func TestIteratorNoCurrent(t *testing.T) {
+	s := openStore(t, t.TempDir())
+	err := s.View(ctx, func(tx core.ReadTx) error {
+		it, err := tx.Iter(core.IterAll)
+		if err != nil {
+			return err
+		}
+		defer it.Close()
+		if err := it.DeleteCurrent(); !errors.Is(err, sqlcommon.ErrNoCurrent) {
+			t.Fatalf("DeleteCurrent before Next = %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -151,47 +232,49 @@ func TestBusyRetry(t *testing.T) {
 	a := openStore(t, dir)
 	b := openStore(t, dir)
 
-	if err := a.Begin(); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Put(core.IPKey("1.1.1.1"), core.Data{First: 1}); err != nil {
-		t.Fatal(err)
-	}
-
-	// b cannot start an immediate transaction while a holds the lock.
-	err := b.Begin()
-	if err == nil {
-		t.Fatal("Begin on a locked database must fail")
-	}
-	if errors.Is(err, core.ErrInTransaction) {
-		t.Fatalf("unexpected error %v", err)
-	}
-	if len(slept) != maxRetry {
-		t.Fatalf("slept %d times, want %d", len(slept), maxRetry)
-	}
-	for _, d := range slept {
-		if d != retryDelay {
-			t.Fatalf("slept %v want %v", d, retryDelay)
+	err := a.Update(ctx, func(tx core.Tx) error {
+		if err := tx.Put(core.IPKey("1.1.1.1"), core.Data{First: 1}); err != nil {
+			return err
 		}
-	}
-	if b.InTxn() {
-		t.Fatal("failed Begin left the store in a transaction")
-	}
-
-	if err := a.Commit(); err != nil {
+		// b cannot start an immediate transaction while a holds the
+		// lock; every retry is exhausted first.
+		called := false
+		err := b.Update(ctx, func(core.Tx) error {
+			called = true
+			return nil
+		})
+		if err == nil {
+			t.Fatal("Update on a locked database must succeed only after a commits")
+		}
+		if called {
+			t.Fatal("fn ran without a transaction")
+		}
+		if len(slept) != maxRetry {
+			t.Fatalf("slept %d times, want %d", len(slept), maxRetry)
+		}
+		for _, d := range slept {
+			if d != retryDelay {
+				t.Fatalf("slept %v want %v", d, retryDelay)
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
+
+	// The failed begin left b usable, and the lock is gone now.
 	slept = nil
-	if err := b.Begin(); err != nil {
-		t.Fatalf("Begin after the lock was released: %v", err)
+	if err := core.Put(ctx, b, core.IPKey("2.2.2.2"), core.Data{First: 2}); err != nil {
+		t.Fatalf("Update after the lock was released: %v", err)
 	}
 	if len(slept) != 0 {
 		t.Fatalf("unexpected retries: %d", len(slept))
 	}
-	if _, found, err := b.Get(core.IPKey("1.1.1.1")); err != nil || !found {
+	if _, found, err := core.Get(ctx, b, core.IPKey("1.1.1.1")); err != nil || !found {
 		t.Fatalf("committed entry not visible: %v %v", found, err)
 	}
-	if err := b.Rollback(); err != nil {
-		t.Fatal(err)
+	if _, found, err := core.Get(ctx, a, core.IPKey("2.2.2.2")); err != nil || !found {
+		t.Fatalf("b's entry not visible to a: %v %v", found, err)
 	}
 }

@@ -31,7 +31,7 @@ import (
 const DriverName = "dummy"
 
 func init() {
-	core.RegisterFirewall(DriverName, func(*config.Config) (core.Firewall, error) { return New(), nil })
+	core.RegisterFirewall(DriverName, func(*config.Config, core.FirewallOptions) (core.Firewall, error) { return New(), nil })
 }
 
 // Firewall records the sets it was asked to replace so tests can inspect
@@ -44,11 +44,11 @@ type Firewall struct {
 // New creates a dummy firewall.
 func New() *Firewall { return &Firewall{sets: make(map[string][]string)} }
 
-func (f *Firewall) Open() error  { return nil }
-func (f *Firewall) Close() error { return nil }
+func (f *Firewall) Open(context.Context) error { return nil }
+func (f *Firewall) Close() error               { return nil }
 
 // Replace remembers the CIDRs and returns their count.
-func (f *Firewall) Replace(set string, cidrs []string, _ core.Family) (int, error) {
+func (f *Firewall) Replace(_ context.Context, set string, cidrs []string, _ core.Family) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sets[set] = append([]string(nil), cidrs...)
@@ -62,8 +62,8 @@ func (f *Firewall) Set(name string) []string {
 	return append([]string(nil), f.sets[name]...)
 }
 
-func (f *Firewall) StartLogCapture() error { return nil }
-func (f *Firewall) EndLogCapture() error   { return nil }
+func (f *Firewall) StartLogCapture(context.Context) error { return nil }
+func (f *Firewall) EndLogCapture() error                  { return nil }
 
 // CaptureLog never produces entries; it returns when ctx is done.
 func (f *Firewall) CaptureLog(ctx context.Context) ([]string, error) {
@@ -72,6 +72,6 @@ func (f *Firewall) CaptureLog(ctx context.Context) ([]string, error) {
 }
 
 // LookupOrigDst defaults to the proxy address.
-func (f *Firewall) LookupOrigDst(_, proxy netip.AddrPort) (netip.AddrPort, error) {
+func (f *Firewall) LookupOrigDst(_ context.Context, _, proxy netip.AddrPort) (netip.AddrPort, error) {
 	return proxy, nil
 }

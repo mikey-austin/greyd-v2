@@ -22,9 +22,14 @@
 // host/port when set). The tables of mysql_schema.sql are created when
 // missing. Rows in entries are tagged with the greyd hostname so several
 // instances can share one database.
+//
+// Transactions come from database/sql's BeginTx on the connection pool
+// (START TRANSACTION, READ ONLY for View). Nested transactions (View or
+// Update called from within a transaction function) are not supported.
 package mysql
 
 import (
+	"context"
 	"database/sql"
 	_ "embed"
 	"fmt"
@@ -35,6 +40,7 @@ import (
 	"github.com/mikey-austin/greyd-golang/adapters/db/sqlcommon"
 	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
+	"github.com/mikey-austin/greyd-golang/internal/logger"
 )
 
 // DriverName is the configuration driver value.
@@ -59,7 +65,6 @@ func init() {
 var dialect = sqlcommon.Dialect{
 	Quote:      '`',
 	HostScoped: true,
-	Begin:      "START TRANSACTION",
 	UpsertEntry: "INSERT INTO entries " +
 		"(`ip`, `helo`, `from`, `to`, `first`, `pass`, `expire`, `bcount`, `pcount`, `greyd_host`) " +
 		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
@@ -85,7 +90,7 @@ type Store struct {
 
 // New creates the store; the connection is made by Open.
 func New(cfg *config.Config, opts core.StoreOptions) *Store {
-	return &Store{Store: sqlcommon.NewStore(dialect, opts.Hostname), cfg: cfg}
+	return &Store{Store: sqlcommon.NewStore(dialect, opts.Hostname, logger.Or(opts.Log)), cfg: cfg}
 }
 
 // Config builds the client configuration from the "database" section.
@@ -107,8 +112,8 @@ func (s *Store) Config() *gomysql.Config {
 }
 
 // Open connects and ensures the schema exists. It is a no-op on an open
-// store.
-func (s *Store) Open(core.OpenMode) error {
+// store. A store opened read-only refuses Update.
+func (s *Store) Open(ctx context.Context, mode core.OpenMode) error {
 	if s.Opened() {
 		return nil
 	}
@@ -117,9 +122,7 @@ func (s *Store) Open(core.OpenMode) error {
 	if err != nil {
 		return fmt.Errorf("could not connect to mysql %s: %w", c.Addr, err)
 	}
-	db := sql.OpenDB(connector)
-	db.SetMaxOpenConns(1)
-	if err := s.Attach(db, sqlcommon.SplitStatements(schemaSQL)); err != nil {
+	if err := s.Attach(ctx, sql.OpenDB(connector), mode, sqlcommon.SplitStatements(schemaSQL)); err != nil {
 		return fmt.Errorf("could not connect to mysql %s: %w", c.Addr, err)
 	}
 	return nil

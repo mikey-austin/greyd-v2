@@ -19,17 +19,17 @@ package greyd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/user"
 	"time"
 
 	"github.com/mikey-austin/greyd-golang/adapters/spf"
-	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
 	"github.com/mikey-austin/greyd-golang/internal/grey"
-	"github.com/mikey-austin/greyd-golang/internal/logger"
 	"github.com/mikey-austin/greyd-golang/internal/privs"
 	"github.com/mikey-austin/greyd-golang/internal/procs"
+	"github.com/mikey-austin/greyd-golang/internal/settings"
 	gsync "github.com/mikey-austin/greyd-golang/internal/sync"
 )
 
@@ -80,40 +80,36 @@ var scanInterval = grey.ScanInterval
 // consumes messages from the main process and a scanner goroutine
 // periodically expires and whitelists entries. Both run as the grey user
 // with their own database handles.
-func runGreyChild(ctx context.Context, cfg *config.Config, files greyFiles) error {
+func runGreyChild(ctx context.Context, s *settings.Settings, files greyFiles, log *slog.Logger) error {
 	defer files.closeAll()
 
-	dbUser := cfg.Str("user", "grey", grey.DBUser)
-	dropPrivs := cfg.Bool("drop_privs", "", true)
 	var pw *user.User
-	if dropPrivs {
+	if s.DropPrivs {
 		var err error
-		if pw, err = privs.LookupUser(dbUser); err != nil {
+		if pw, err = privs.LookupUser(s.Grey.User); err != nil {
 			return err
 		}
 	}
-	hostname := cfg.Str("hostname", "", "")
-	opts := core.StoreOptions{User: pw, Hostname: hostname}
+	opts := core.StoreOptions{User: pw, Hostname: s.Hostname, Log: log}
 
-	readerStore, err := core.OpenStore(cfg, opts)
+	readerStore, err := core.OpenStore(s.Raw(), opts)
 	if err != nil {
 		return fmt.Errorf("could not create db handle: %w", err)
 	}
-	scannerStore, err := core.OpenStore(cfg, opts)
+	scannerStore, err := core.OpenStore(s.Raw(), opts)
 	if err != nil {
 		return fmt.Errorf("could not create db handle: %w", err)
 	}
 
 	// The greylister only sends sync messages; the main process receives.
-	cfg.Delete("bind_address", "sync")
 	var syncer grey.Syncer
-	if len(cfg.StrList("hosts", "sync")) > 0 {
-		eng, err := gsync.New(cfg)
+	if sendOnly := s.WithoutSyncBind(); len(sendOnly.Sync.Hosts) > 0 {
+		eng, err := gsync.New(sendOnly.Sync, sendOnly.Grey.Enable, log)
 		if err != nil {
-			logger.Warning("could not start sync engine: %v", err)
+			log.Warn("could not start sync engine", "err", err)
 		} else if eng != nil {
 			if err := eng.Start(); err != nil {
-				logger.Warning("could not start sync engine: %v", err)
+				log.Warn("could not start sync engine", "err", err)
 			} else {
 				syncer = eng
 				defer eng.Stop()
@@ -121,32 +117,32 @@ func runGreyChild(ctx context.Context, cfg *config.Config, files greyFiles) erro
 		}
 	}
 
-	if dropPrivs {
+	if s.DropPrivs {
 		if err := privs.Drop(pw); err != nil {
 			return fmt.Errorf("failed to drop privileges: %w", err)
 		}
 	}
 
-	if err := readerStore.Open(core.OpenRW); err != nil {
+	if err := readerStore.Open(ctx, core.OpenRW); err != nil {
 		return err
 	}
 	defer readerStore.Close()
-	if err := scannerStore.Open(core.OpenRW); err != nil {
+	if err := scannerStore.Open(ctx, core.OpenRW); err != nil {
 		return err
 	}
 	defer scannerStore.Close()
 
 	var checker core.SPFChecker
-	if cfg.Bool("enable", "spf", true) {
+	if s.SPF.Enable {
 		checker = spfFactory()
 	}
 
 	startup := time.Now()
-	reader, err := grey.New(grey.Options{Config: cfg, Store: readerStore, Syncer: syncer, SPF: checker, Startup: startup})
+	reader, err := grey.New(grey.Options{Settings: s, Store: readerStore, Syncer: syncer, SPF: checker, Startup: startup, Log: log})
 	if err != nil {
 		return err
 	}
-	scanner, err := grey.New(grey.Options{Config: cfg, Store: scannerStore, TrapOut: files.trapOut, FwOut: files.fwOut, Startup: startup})
+	scanner, err := grey.New(grey.Options{Settings: s, Store: scannerStore, TrapOut: files.trapOut, FwOut: files.fwOut, Startup: startup, Log: log})
 	if err != nil {
 		return err
 	}
@@ -158,7 +154,7 @@ func runGreyChild(ctx context.Context, cfg *config.Config, files greyFiles) erro
 	go func() {
 		err := reader.RunReader(ctx, files.greyIn)
 		if err != nil {
-			logger.Warning("grey reader stopped: %v", err)
+			log.Warn("grey reader stopped", "err", err)
 		}
 		errc <- err
 	}()
@@ -170,7 +166,7 @@ func runGreyChild(ctx context.Context, cfg *config.Config, files greyFiles) erro
 	case <-ctx.Done():
 	case <-errc:
 	}
-	logger.Info("exiting")
+	log.Info("exiting")
 	cancel()
 	// Unblock the reader's pipe read.
 	_ = files.greyIn.Close()

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -23,11 +22,13 @@ import (
 	"github.com/mikey-austin/greyd-golang/internal/core"
 	"github.com/mikey-austin/greyd-golang/internal/ipc"
 	"github.com/mikey-austin/greyd-golang/internal/logger"
+	"github.com/mikey-austin/greyd-golang/internal/settings"
 	"github.com/mikey-austin/greyd-golang/internal/version"
 )
 
+var testLog = logger.Discard()
+
 func init() {
-	_ = logger.Setup(logger.Options{Ident: "test", Stderr: io.Discard})
 	spfFactory = func() core.SPFChecker { return nil }
 	scanInterval = 100 * time.Millisecond
 }
@@ -76,18 +77,18 @@ func TestParseFlags(t *testing.T) {
 }
 
 func TestPermittedProxies(t *testing.T) {
-	bl := permittedProxies([]string{"127.0.0.0/8", "bogus", "::1"})
+	bl := permittedProxies([]string{"127.0.0.0/8", "bogus", "::1"}, testLog)
 	if !bl.Match(mustAddr("127.0.0.5")) || !bl.Match(mustAddr("::1")) || bl.Match(mustAddr("10.0.0.1")) {
 		t.Fatal("permitted proxies")
 	}
-	if permittedProxies(nil).Match(mustAddr("127.0.0.1")) {
+	if permittedProxies(nil, testLog).Match(mustAddr("127.0.0.1")) {
 		t.Fatal("empty list must match nothing")
 	}
 }
 
 func mustAddr(s string) netip.Addr { return netip.MustParseAddr(s) }
 
-func testConfig(t *testing.T, dbName string, extra string) *config.Config {
+func testConfig(t *testing.T, dbName string, extra string) *settings.Settings {
 	t.Helper()
 	me, err := user.Current()
 	if err != nil {
@@ -123,7 +124,21 @@ section database {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return cfg
+	s, err := settings.Load(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// blMsg builds a blacklist message for the config socket code path.
+func blMsg(t *testing.T, body string) ipc.Message {
+	t.Helper()
+	m, err := ipc.Decode(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
 }
 
 type running struct {
@@ -132,9 +147,9 @@ type running struct {
 	stop func()
 }
 
-func startDaemon(t *testing.T, cfg *config.Config, o Options) *running {
+func startDaemon(t *testing.T, cfg *settings.Settings, o Options) *running {
 	t.Helper()
-	d, err := newDaemon(cfg, o, 800)
+	d, err := newDaemon(cfg, o, 800, testLog)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +231,7 @@ func TestGreylistedDialogueEndToEnd(t *testing.T) {
 	tuple := core.Tuple{IP: "127.0.0.1", Helo: "mx.example.org", From: "sender@example.org", To: "rcpt@greyd.test"}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		d, found, _ := store.Get(core.TupleKey(tuple))
+		d, found, _ := core.Get(context.Background(), store, core.TupleKey(tuple))
 		if found {
 			if d.BCount != 1 || d.PCount != 0 {
 				t.Fatalf("tuple data %+v", d)
@@ -230,11 +245,11 @@ func TestGreylistedDialogueEndToEnd(t *testing.T) {
 	}
 
 	// Pidfile exists while running.
-	if _, err := os.Stat(cfg.Str("greyd_pidfile", "", "")); err != nil {
+	if _, err := os.Stat(cfg.GreydPidfile); err != nil {
 		t.Fatalf("pidfile: %v", err)
 	}
 	r.stop()
-	if _, err := os.Stat(cfg.Str("greyd_pidfile", "", "")); !os.IsNotExist(err) {
+	if _, err := os.Stat(cfg.GreydPidfile); !os.IsNotExist(err) {
 		t.Fatal("pidfile should be removed on shutdown")
 	}
 }
@@ -244,7 +259,7 @@ func TestTraplistFlowsBackToMain(t *testing.T) {
 	// Pre-load a greytrapped address so the first scan sends a traplist.
 	store := memory.Open("trap")
 	now := time.Now().Unix()
-	_ = store.Put(core.IPKey("127.0.0.1"), core.Data{First: now, Pass: now + 86400, Expire: now + 86400, BCount: 1, PCount: core.PCountTrapped})
+	_ = core.Put(context.Background(), store, core.IPKey("127.0.0.1"), core.Data{First: now, Pass: now + 86400, Expire: now + 86400, BCount: 1, PCount: core.PCountTrapped})
 
 	cfg := testConfig(t, "trap", `
 section grey {
@@ -310,34 +325,31 @@ func TestConfigSocketRejectsUnprivilegedPort(t *testing.T) {
 
 	// Installing through the same code path used by the config socket
 	// works and replaces same-named lists.
-	m, _ := parse.String("name=\"bl\"\nmessage=\"m %A\"\nips=[\"10.0.0.0/8\"]\n")
-	r.d.addBlacklist(m)
-	m, _ = parse.String("name=\"bl\"\nmessage=\"m2 %A\"\nips=[\"11.0.0.0/8\"]\n")
-	r.d.addBlacklist(m)
+	r.d.addBlacklist(blMsg(t, "name=\"bl\"\nmessage=\"m %A\"\nips=[\"10.0.0.0/8\"]\n"), "test")
+	r.d.addBlacklist(blMsg(t, "name=\"bl\"\nmessage=\"m2 %A\"\nips=[\"11.0.0.0/8\"]\n"), "test")
 	bls := r.d.snapshotBlacklists()
 	if len(bls) != 1 || bls[0].Message != "m2 %A" || bls[0].Match(mustAddr("10.1.1.1")) || !bls[0].Match(mustAddr("11.1.1.1")) {
 		t.Fatalf("replace blacklist %+v", bls)
 	}
-	// Incomplete frames are ignored.
-	m, _ = parse.String("name=\"x\"\n")
-	r.d.addBlacklist(m)
+	// Messages of another type are ignored.
+	r.d.addBlacklist(&ipc.DstReply{Dst: "x"}, "test")
 	if len(r.d.snapshotBlacklists()) != 1 {
-		t.Fatal("incomplete frame installed")
+		t.Fatal("unexpected message installed")
 	}
 }
 
 func TestMaxBlackValidation(t *testing.T) {
 	cfg := testConfig(t, "mb", "max_cons = 10\nmax_cons_black = 20\n")
-	if _, err := newDaemon(cfg, Options{Opts: config.New()}, 800); err == nil {
+	if _, err := newDaemon(cfg, Options{Opts: config.New()}, 800, testLog); err == nil {
 		t.Fatal("max_cons_black > max_cons must fail")
 	}
 	cfg = testConfig(t, "mb2", "max_cons = 10\nmax_cons_black = 20\nsection grey { enable = 0 }\n")
-	d, err := newDaemon(cfg, Options{Opts: config.New()}, 800)
+	d, err := newDaemon(cfg, Options{Opts: config.New()}, 800, testLog)
 	if err != nil || d.maxBlack != 10 {
 		t.Fatalf("blacklist-only mode: %v %d", err, d.maxBlack)
 	}
 	cfg = testConfig(t, "mb3", "max_cons = 5000\n")
-	d, err = newDaemon(cfg, Options{Opts: config.New()}, 800)
+	d, err = newDaemon(cfg, Options{Opts: config.New()}, 800, testLog)
 	if err != nil || d.maxCons != 800 {
 		t.Fatalf("max files clamp: %v %d", err, d.maxCons)
 	}
@@ -345,7 +357,7 @@ func TestMaxBlackValidation(t *testing.T) {
 
 func TestBindErrors(t *testing.T) {
 	cfg := testConfig(t, "bind", "bind_address = \"not-an-ip\"\n")
-	d, err := newDaemon(cfg, Options{Opts: config.New()}, 800)
+	d, err := newDaemon(cfg, Options{Opts: config.New()}, 800, testLog)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,8 +371,7 @@ func TestBlacklistOnlyMode(t *testing.T) {
 	memory.Reset("bonly")
 	cfg := testConfig(t, "bonly", "section grey { enable = 0 }\n")
 	r := startDaemon(t, cfg, Options{Opts: config.New()})
-	m, _ := parse.String("name=\"local\"\nmessage=\"blocked %A\"\nips=[\"127.0.0.0/8\"]\n")
-	r.d.addBlacklist(m)
+	r.d.addBlacklist(blMsg(t, "name=\"local\"\nmessage=\"blocked %A\"\nips=[\"127.0.0.0/8\"]\n"), "test")
 
 	conn, br := dialSMTP(t, r.d.MainAddr())
 	defer conn.Close()
@@ -380,4 +391,105 @@ func currentUser(t *testing.T) string {
 		t.Skip("no current user")
 	}
 	return me.Username
+}
+
+func TestConfigUnixSocketAcceptsOwner(t *testing.T) {
+	memory.Reset("cfgunix")
+	sock := filepath.Join(t.TempDir(), "greyd.sock")
+	cfg := testConfig(t, "cfgunix", fmt.Sprintf("config_socket = %q\n", sock))
+	r := startDaemon(t, cfg, Options{Opts: config.New()})
+
+	if fi, err := os.Stat(sock); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("socket mode: %v %v", err, fi)
+	}
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ipc.WriteBlacklist(conn, "viaunix", "msg %A", []string{"1.2.3.4"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		found := false
+		for _, bl := range r.d.snapshotBlacklists() {
+			if bl.Name == "viaunix" && bl.Match(mustAddr("1.2.3.4")) {
+				found = true
+			}
+		}
+		if found {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("blacklist sent over the unix socket was not installed")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Stale socket files are replaced on the next bind; other files are
+	// not touched.
+	r.stop()
+	_ = os.WriteFile(sock, []byte("x"), 0o600)
+	d, err := newDaemon(cfg, Options{Opts: config.New()}, 800, testLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.bind(); err == nil || !strings.Contains(err.Error(), "not a socket") {
+		d.closeListeners()
+		t.Fatalf("bind over a regular file: %v", err)
+	}
+}
+
+func TestConfigFrameLimitOnConfigSocket(t *testing.T) {
+	memory.Reset("cfgframe")
+	sock := filepath.Join(t.TempDir(), "greyd.sock")
+	cfg := testConfig(t, "cfgframe", fmt.Sprintf("config_socket = %q\nmax_config_frame = 1024\n", sock))
+	r := startDaemon(t, cfg, Options{Opts: config.New()})
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ips := make([]string, 200)
+	for i := range ips {
+		ips[i] = fmt.Sprintf("10.0.%d.0/24", i)
+	}
+	_ = ipc.WriteBlacklist(conn, "big", "m", ips)
+	_ = conn.Close()
+	time.Sleep(100 * time.Millisecond)
+	if n := len(r.d.snapshotBlacklists()); n != 0 {
+		t.Fatalf("oversized frame installed %d blacklists", n)
+	}
+}
+
+func TestInformationalSwitches(t *testing.T) {
+	var out, errb strings.Builder
+	if rc := Run([]string{"--drivers"}, &out, &errb); rc != 0 || !strings.Contains(out.String(), "memory") || !strings.Contains(out.String(), "dummy") {
+		t.Fatalf("--drivers: rc=%d out=%q err=%q", rc, out.String(), errb.String())
+	}
+	out.Reset()
+	if rc := Run([]string{"--version"}, &out, &errb); rc != 0 || !strings.Contains(out.String(), version.Version) {
+		t.Fatalf("--version: rc=%d out=%q", rc, out.String())
+	}
+
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good.conf")
+	_ = os.WriteFile(good, []byte("hostname = \"h\"\nbogus_option = 1\nsection database { driver = \"memory\" }\nsection firewall { driver = \"dummy\" }\n"), 0o600)
+	out.Reset()
+	if rc := Run([]string{"-t", "-f", good}, &out, &errb); rc != 0 || !strings.Contains(out.String(), "configuration OK") || !strings.Contains(out.String(), "bogus_option") {
+		t.Fatalf("-t good: rc=%d out=%q err=%q", rc, out.String(), errb.String())
+	}
+	bad := filepath.Join(dir, "bad.conf")
+	_ = os.WriteFile(bad, []byte("port = 99999\n"), 0o600)
+	out.Reset()
+	errb.Reset()
+	if rc := Run([]string{"-t", "-f", bad}, &out, &errb); rc == 0 || !strings.Contains(errb.String(), "port") {
+		t.Fatalf("-t bad: rc=%d out=%q err=%q", rc, out.String(), errb.String())
+	}
+	nodrv := filepath.Join(dir, "nodrv.conf")
+	_ = os.WriteFile(nodrv, []byte("section database { driver = \"nosuch\" }\n"), 0o600)
+	out.Reset()
+	if rc := Run([]string{"-t", "-f", nodrv}, &out, &errb); rc == 0 || !strings.Contains(out.String(), "unknown database driver") {
+		t.Fatalf("-t nodrv: rc=%d out=%q", rc, out.String())
+	}
 }

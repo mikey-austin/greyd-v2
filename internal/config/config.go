@@ -76,6 +76,21 @@ func (c *Config) Blacklist(name string) *Section { return c.blacklists[name] }
 // Whitelist returns the named whitelist definition or nil.
 func (c *Config) Whitelist(name string) *Section { return c.whitelists[name] }
 
+// BlacklistNames returns the blacklist definition names, sorted.
+func (c *Config) BlacklistNames() []string { return sortedKeys(c.blacklists) }
+
+// WhitelistNames returns the whitelist definition names, sorted.
+func (c *Config) WhitelistNames() []string { return sortedKeys(c.whitelists) }
+
+func sortedKeys(m map[string]*Section) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // SectionNames returns the section names in insertion order.
 func (c *Config) SectionNames() []string {
 	out := make([]string, len(c.order))

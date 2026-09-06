@@ -104,6 +104,18 @@ The following options may be specified outside of a section. A *boolean* value i
 * **config_port** = *number*:
   The port on which to listen for blacklist configuration data (see **greyd-setup**(8)). Defaults to *8026*.
 
+* **config_socket** = *string*:
+  When set, blacklist configuration data is accepted on this unix domain socket instead of the loopback TCP port. Only the super user and the *user* **greyd** runs as may connect (the peer credentials are checked). **greyd-setup**(8) reads the same option to find the daemon. Unset by default.
+
+* **max_config_frame** = *number*:
+  The largest blacklist (in bytes) accepted on a configuration connection or from the greylister. Defaults to *67108864* (64 MiB); the minimum is *1024*.
+
+* **max_cons_per_source** = *number*:
+  The maximum number of simultaneous connections accepted from one client address; further connections from that address are closed immediately. *0* (the default) disables the limit.
+
+* **max_line_length** = *number*:
+  The longest SMTP command line (in bytes) a client may send before the line is rejected with a 500 error. Defaults to *8191*.
+
 * **greyd_pidfile** = *string*:
   The greyd pidfile path.
 
@@ -315,6 +327,9 @@ The memory driver keeps the database in the memory of the greylisting process. N
 * **trap_expiry** = *number*:
   The amount of time in seconds after which to remove greytrapped entries. Defaults to *1 day*.
 
+* **max_domains** = *number*:
+  The maximum number of entries read from the *permitted_domains* file; a longer file is truncated with a warning. Defaults to *100000*, *0* disables the limit.
+
 ## SYNCHRONISATION SECTION
 
 * **enable** = *boolean*:
@@ -341,6 +356,9 @@ The memory driver keeps the database in the memory of the greylisting process. N
 * **mcast_address** = *string*:
   The multicast group address for sync messages.
 
+* **replay_window** = *number*:
+  Sync messages carry a counter; a message whose counter has already been seen from the same peer within the last *replay_window* counters is dropped, which defeats replayed captures. Defaults to *64*, *0* disables the check (needed when peers do not use monotonic counters).
+
 ## SPF SECTION
 
 This section controls the operation of the SPF validation functionality. SPF support is always built in.
@@ -363,6 +381,9 @@ This section controls the operation of the **greyd-setup**(8) program.
 
 * **curl_path** = *string*:
   The path to the *curl* program, which is used to fetch the lists via *HTTP* and *FTP*.
+
+* **max_entries** = *number*:
+  The maximum number of addresses read from a single list; the remainder is dropped with a warning. Defaults to *10000000*.
 
 * **curl_proxy** = *string*:
   Specify a *proxyhost[:port]* through which to fetch the lists.

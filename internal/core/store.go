@@ -17,7 +17,9 @@
 package core
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"os/user"
 
 	"github.com/mikey-austin/greyd-golang/internal/config"
@@ -107,45 +109,59 @@ const (
 	IterAll                 = IterEntries | IterSpamtraps | IterDomains
 )
 
-// ScanResult is produced by Store.Scan.
+// ScanResult is produced by Tx.Scan.
 type ScanResult struct {
 	Whitelist   []string
 	WhitelistV6 []string
 	Traplist    []string
 }
 
-// ErrNotInTransaction is returned by Commit/Rollback without Begin.
-var ErrNotInTransaction = errors.New("not in a transaction")
+// ErrReadOnly is returned for writes on a read-only store or transaction.
+var ErrReadOnly = errors.New("store is read-only")
 
-// ErrInTransaction is returned by Begin while a transaction is open.
-var ErrInTransaction = errors.New("already in a transaction")
+// ErrNotOpen is returned when a store is used before Open.
+var ErrNotOpen = errors.New("store is not open")
 
-// Store is the database port. Implementations are not required to be safe
-// for concurrent use; each process/goroutine opens its own Store.
+// Store is the database port. A store is opened once per process and
+// every operation runs inside a transaction created by View or Update, so
+// rollback on error is automatic and callers cannot leave a transaction
+// open. Implementations need not be safe for concurrent use.
 type Store interface {
-	// Open connects to the database. Calling it on an open store is a no-op.
-	Open(mode OpenMode) error
+	// Open connects to the database; calling it on an open store is a
+	// no-op.
+	Open(ctx context.Context, mode OpenMode) error
 	Close() error
 
-	Begin() error
-	Commit() error
-	Rollback() error
+	// View runs fn in a read-only transaction.
+	View(ctx context.Context, fn func(tx ReadTx) error) error
 
-	Put(k Key, d Data) error
-	// Get returns the entry and whether it was found. For KeyDomainPart the
-	// data is meaningless and only the found flag matters.
+	// Update runs fn in a read-write transaction, committing when fn
+	// returns nil and rolling back otherwise (the error is returned).
+	Update(ctx context.Context, fn func(tx Tx) error) error
+}
+
+// ReadTx is the read side of a transaction.
+type ReadTx interface {
+	// Get returns the entry and whether it was found. For KeyDomainPart
+	// only the found flag is meaningful.
 	Get(k Key) (Data, bool, error)
+	Iter(types IterTypes) (Iterator, error)
+}
+
+// Tx is a read-write transaction.
+type Tx interface {
+	ReadTx
+	Put(k Key, d Data) error
 	// Del removes an entry and reports whether it existed.
 	Del(k Key) (bool, error)
-
-	Iter(types IterTypes) (Iterator, error)
-
-	// Scan expires entries, whitelists grey tuples whose pass time has come
-	// and returns the current whitelist (split by family) and traplist.
+	// Scan expires entries, whitelists grey tuples whose pass time has
+	// come and returns the current whitelists (split by family) and
+	// traplist.
 	Scan(now int64, whiteExp int64) (ScanResult, error)
 }
 
-// Iterator walks database entries.
+// Iterator walks database entries within the transaction it was created
+// in.
 type Iterator interface {
 	// Next returns the next entry, or ok=false at the end.
 	Next() (k Key, d Data, ok bool, err error)
@@ -156,6 +172,11 @@ type Iterator interface {
 	Close() error
 }
 
+// Getter is the read side used by helpers.
+type Getter interface {
+	Get(k Key) (Data, bool, error)
+}
+
 // StoreOptions carries process level information to store factories.
 type StoreOptions struct {
 	// User is the unprivileged database user (nil when privileges are not
@@ -163,21 +184,18 @@ type StoreOptions struct {
 	User *user.User
 	// Hostname identifies this greyd instance for shared SQL databases.
 	Hostname string
+	// Log receives driver diagnostics; nil discards them.
+	Log *slog.Logger
 }
 
 // StoreFactory constructs a store from the "database" configuration
 // section.
 type StoreFactory func(cfg *config.Config, opts StoreOptions) (Store, error)
 
-// Getter is the read side of a Store.
-type Getter interface {
-	Get(k Key) (Data, bool, error)
-}
-
 // AddrState reports the state of an address: 0 not found, 1 greytrapped,
 // 2 whitelisted (DB_addr_state).
-func AddrState(s Getter, ip string) (int, error) {
-	d, found, err := s.Get(IPKey(ip))
+func AddrState(g Getter, ip string) (int, error) {
+	d, found, err := g.Get(IPKey(ip))
 	if err != nil {
 		return -1, err
 	}
@@ -188,4 +206,27 @@ func AddrState(s Getter, ip string) (int, error) {
 		return 1, nil
 	}
 	return 2, nil
+}
+
+// Get is a single-operation read.
+func Get(ctx context.Context, s Store, k Key) (d Data, found bool, err error) {
+	err = s.View(ctx, func(tx ReadTx) error {
+		d, found, err = tx.Get(k)
+		return err
+	})
+	return d, found, err
+}
+
+// Put is a single-operation write.
+func Put(ctx context.Context, s Store, k Key, d Data) error {
+	return s.Update(ctx, func(tx Tx) error { return tx.Put(k, d) })
+}
+
+// Del is a single-operation delete.
+func Del(ctx context.Context, s Store, k Key) (found bool, err error) {
+	err = s.Update(ctx, func(tx Tx) error {
+		found, err = tx.Del(k)
+		return err
+	})
+	return found, err
 }

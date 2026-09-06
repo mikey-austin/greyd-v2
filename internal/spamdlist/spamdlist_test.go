@@ -123,6 +123,21 @@ func TestParseErrors(t *testing.T) {
 	}
 }
 
+func TestParseLimited(t *testing.T) {
+	bl := blacklist.New("t", "m", blacklist.StorageList)
+	err := ParseLimited(strings.NewReader("1.1.1.1\n2.2.2.2\n3.3.3.3\n"), bl, blacklist.TypeBlack, 2)
+	if !errors.Is(err, ErrTooManyEntries) {
+		t.Fatalf("expected ErrTooManyEntries, got %v", err)
+	}
+	if bl.Count != 4 {
+		t.Fatalf("entries kept up to the limit: %d", bl.Count)
+	}
+	bl = blacklist.New("t", "m", blacklist.StorageList)
+	if err := ParseLimited(strings.NewReader("1.1.1.1\n2.2.2.2\n"), bl, blacklist.TypeBlack, 2); err != nil {
+		t.Fatalf("exactly at the limit must succeed: %v", err)
+	}
+}
+
 func TestWhitelistType(t *testing.T) {
 	bl := blacklist.New("t", "m", blacklist.StorageList)
 	if err := Parse(strings.NewReader("10.0.0.0/8\n"), bl, blacklist.TypeBlack); err != nil {

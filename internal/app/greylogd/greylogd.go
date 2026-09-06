@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -33,9 +34,9 @@ import (
 	"github.com/mikey-austin/greyd-golang/internal/cli"
 	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
-	"github.com/mikey-austin/greyd-golang/internal/grey"
 	"github.com/mikey-austin/greyd-golang/internal/logger"
 	"github.com/mikey-austin/greyd-golang/internal/privs"
+	"github.com/mikey-austin/greyd-golang/internal/settings"
 	greydsync "github.com/mikey-austin/greyd-golang/internal/sync"
 	"github.com/mikey-austin/greyd-golang/internal/version"
 )
@@ -124,23 +125,34 @@ func Run(args []string, stderr io.Writer) int {
 	}
 	cfg.Merge(opts.Opts)
 
-	if err := logger.Setup(logger.Options{
-		Ident:  progName,
-		Debug:  cfg.Bool("debug", "", false),
-		Syslog: cfg.Bool("syslog_enable", "", true),
-		File:   cfg.Str("log_to_file", "", ""),
-		Stderr: stderr,
-	}); err != nil {
+	s, err := settings.Load(cfg)
+	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", progName, err)
 		return 1
 	}
 
-	// Ensure that the sync bind address is not set.
-	cfg.Delete("bind_address", "sync")
+	log, h, err := logger.New(logger.Options{
+		Ident:  progName,
+		Debug:  s.Global.Debug,
+		Syslog: s.Global.SyslogEnable,
+		File:   s.Global.LogToFile,
+		Stderr: stderr,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", progName, err)
+		return 1
+	}
+	defer func() { _ = h.Close() }()
+	for _, w := range s.Warnings {
+		log.Warn(w)
+	}
+
+	// Ensure that the sync bind address is not set: greylogd only sends.
+	s = s.WithoutSyncBind()
 
 	syncSend := opts.SyncSend
 	if syncSend == 0 {
-		syncSend = len(cfg.StrList("hosts", "sync"))
+		syncSend = len(s.Sync.Hosts)
 	}
 
 	var (
@@ -148,16 +160,18 @@ func Run(args []string, stderr io.Writer) int {
 		syncer Syncer
 	)
 	if syncSend > 0 {
-		eng, err = greydsync.New(cfg)
+		// greylogd never receives, so forwarding of received entries
+		// to a greylister is irrelevant.
+		eng, err = greydsync.New(s.Sync, false, log)
 		switch {
 		case err != nil:
-			logger.Warning("sync disabled by configuration: %v", err)
+			log.Warn("sync disabled by configuration", "err", err)
 			eng = nil
 		case eng == nil:
-			logger.Warning("sync disabled by configuration")
+			log.Warn("sync disabled by configuration")
 		default:
 			if err := eng.Start(); err != nil {
-				logger.Warning("could not start sync engine: %v", err)
+				log.Warn("could not start sync engine", "err", err)
 				eng.Stop()
 				eng = nil
 			}
@@ -167,29 +181,31 @@ func Run(args []string, stderr io.Writer) int {
 		syncer = eng
 	}
 
-	dbUser := cfg.Str("user", "grey", grey.DBUser)
-	dbPw, err := privs.LookupUser(dbUser)
+	dbPw, err := privs.LookupUser(s.Grey.User)
 	if err != nil {
-		logger.Error("getpwnam: %v", err)
+		log.Error("getpwnam", "user", s.Grey.User, "err", err)
 		eng.Stop()
 		return 1
 	}
 
-	if cfg.Bool("daemonize", "", true) {
+	if s.Global.Daemonize {
 		if err := privs.Daemonize(true); err != nil {
-			logger.Warning("daemon: %v", err)
+			log.Warn("daemon", "err", err)
 			eng.Stop()
 			return 1
 		}
 	}
 
-	pidfilePath := cfg.Str("greylogd_pidfile", "", version.GreylogdPidfile)
+	pidfilePath := s.Global.GreylogdPidfile
+	if pidfilePath == "" {
+		pidfilePath = version.GreylogdPidfile
+	}
 	pidfile, err := privs.WritePidfile(pidfilePath, dbPw)
 	if err != nil {
 		if errors.Is(err, privs.ErrAlreadyRunning) {
-			logger.Error("it appears greylogd is already running...")
+			log.Error("it appears greylogd is already running...")
 		} else {
-			logger.Error("could not write pidfile %s: %v", pidfilePath, err)
+			log.Error("could not write pidfile", "path", pidfilePath, "err", err)
 		}
 		eng.Stop()
 		return 1
@@ -199,36 +215,39 @@ func Run(args []string, stderr io.Writer) int {
 	if cfg.Bool("track_outbound", "firewall", true) {
 		direction = "in both directions"
 	}
-	logger.Info("listening, %s", direction)
+	log.Info("listening", "direction", direction)
 
-	fw, err := core.OpenFirewall(cfg)
+	ctx, stop := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+
+	fw, err := core.OpenFirewall(ctx, cfg, core.FirewallOptions{Log: log})
 	if err != nil {
-		logger.Error("could not obtain firewall handle: %v", err)
+		log.Error("could not obtain firewall handle", "err", err)
 		eng.Stop()
 		_ = pidfile.Close("")
 		return 1
 	}
 
-	dropPrivs := cfg.Bool("drop_privs", "", true)
-	storeOpts := core.StoreOptions{Hostname: cfg.Str("hostname", "", hostname())}
+	dropPrivs := s.Global.DropPrivs
+	storeOpts := core.StoreOptions{Hostname: s.Global.Hostname, Log: log}
+	if storeOpts.Hostname == "" {
+		storeOpts.Hostname = hostname()
+	}
 	if dropPrivs {
 		storeOpts.User = dbPw
 	}
 	store, err := core.OpenStore(cfg, storeOpts)
 	if err != nil {
-		logger.Error("could not obtain database handle: %v", err)
+		log.Error("could not obtain database handle", "err", err)
 		_ = fw.Close()
 		eng.Stop()
 		_ = pidfile.Close("")
 		return 1
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(),
-		syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP)
-	defer stop()
-
-	if err := fw.StartLogCapture(); err != nil {
-		logger.Error("could not start firewall log capture: %v", err)
+	if err := fw.StartLogCapture(ctx); err != nil {
+		log.Error("could not start firewall log capture", "err", err)
 		_ = fw.Close()
 		_ = store.Close()
 		eng.Stop()
@@ -238,15 +257,15 @@ func Run(args []string, stderr io.Writer) int {
 
 	if dbPw != nil && dropPrivs {
 		if err := privs.Drop(dbPw); err != nil {
-			logger.Warning("could not drop privileges: %v", err)
+			log.Warn("could not drop privileges", "err", err)
 			goto shutdown
 		}
 	}
 
 	{
-		whiteExp := int64(cfg.Int("white_expiry", "grey", grey.WhiteExp))
-		if err := store.Open(core.OpenRW); err != nil {
-			logger.Warning("could not open database: %v", err)
+		whiteExp := s.Grey.WhiteExpiry
+		if err := store.Open(ctx, core.OpenRW); err != nil {
+			log.Warn("could not open database", "err", err)
 			goto shutdown
 		}
 
@@ -254,27 +273,27 @@ func Run(args []string, stderr io.Writer) int {
 			addrs, err := fw.CaptureLog(ctx)
 			if err != nil {
 				if ctx.Err() == nil {
-					logger.Warning("error capturing firewall log: %v", err)
+					log.Warn("error capturing firewall log", "err", err)
 				}
 				break
 			}
 			if len(addrs) == 0 {
 				continue
 			}
-			if err := processAddresses(store, addrs, time.Now(), whiteExp, syncer); err != nil {
+			if err := processAddresses(ctx, log, store, addrs, time.Now(), whiteExp, syncer); err != nil {
 				break
 			}
 		}
 	}
 
 shutdown:
-	logger.Info("exiting")
+	log.Info("exiting")
 	_ = fw.EndLogCapture()
 	_ = fw.Close()
 	_ = store.Close()
 	eng.Stop()
 	if err := pidfile.Close(""); err != nil {
-		logger.Warning("%v", err)
+		log.Warn("could not remove pidfile", "err", err)
 	}
 
 	return 0
@@ -284,45 +303,39 @@ shutdown:
 // within its own transaction: a missing entry is created with first and
 // pass set to now, then pcount is incremented and the expiry pushed out by
 // whiteExp seconds. Each update is announced to syncer when non-nil. The
-// first failure is logged and returned after rolling back.
-func processAddresses(store core.Store, addrs []string, now time.Time, whiteExp int64, syncer Syncer) error {
+// first failure is logged and returned; the failed transaction is rolled
+// back by the store.
+func processAddresses(ctx context.Context, log *slog.Logger, store core.Store, addrs []string, now time.Time, whiteExp int64, syncer Syncer) error {
 	ts := now.Unix()
 	expire := now.Add(time.Duration(whiteExp) * time.Second)
 
 	for _, addr := range addrs {
 		key := core.IPKey(addr)
-		if err := store.Begin(); err != nil {
-			logger.Warning("error starting transaction for %s: %v", addr, err)
-			return err
-		}
+		err := store.Update(ctx, func(tx core.Tx) error {
+			d, found, err := tx.Get(key)
+			if err != nil {
+				return fmt.Errorf("query: %w", err)
+			}
+			if !found {
+				// Create new entry.
+				d = core.Data{First: ts, Pass: ts}
+			}
 
-		d, found, err := store.Get(key)
+			// Update existing entry.
+			d.PCount++
+			d.Expire = ts + whiteExp
+			if err := tx.Put(key, d); err != nil {
+				return fmt.Errorf("put: %w", err)
+			}
+
+			log.Info("whitelisting", "ip", addr)
+			if syncer != nil {
+				syncer.White(addr, now, expire, false)
+			}
+			return nil
+		})
 		if err != nil {
-			logger.Warning("error querying database for %s: %v", addr, err)
-			_ = store.Rollback()
-			return err
-		}
-		if !found {
-			// Create new entry.
-			d = core.Data{First: ts, Pass: ts}
-		}
-
-		// Update existing entry.
-		d.PCount++
-		d.Expire = ts + whiteExp
-		if err := store.Put(key, d); err != nil {
-			logger.Warning("error putting %s: %v", addr, err)
-			_ = store.Rollback()
-			return err
-		}
-
-		logger.Info("whitelisting %s", addr)
-		if syncer != nil {
-			syncer.White(addr, now, expire, false)
-		}
-
-		if err := store.Commit(); err != nil {
-			logger.Warning("error committing %s: %v", addr, err)
+			log.Warn("error updating whitelist entry", "ip", addr, "err", err)
 			return err
 		}
 	}

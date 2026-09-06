@@ -21,14 +21,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/mikey-austin/greyd-golang/internal/config"
+	"github.com/mikey-austin/greyd-golang/internal/core"
 	"github.com/mikey-austin/greyd-golang/internal/logger"
 	"github.com/mikey-austin/greyd-golang/internal/privs"
 	"github.com/mikey-austin/greyd-golang/internal/procs"
+	"github.com/mikey-austin/greyd-golang/internal/settings"
 	"github.com/mikey-austin/greyd-golang/internal/version"
 )
 
@@ -38,23 +42,16 @@ const (
 	RoleGrey     = "grey"
 )
 
-// Constants from constants.h.
+// Constants from constants.h that are not configuration defaults.
 const (
-	DefaultPort     = 8025
-	DefaultCfgPort  = 8026
-	MainUser        = "greyd"
-	DefaultChroot   = 1
-	ChrootDir       = "/var/empty"
-	Backlog         = 10
-	NumBlacklists   = 10
-	PollTimeout     = 1000
-	IPPortReserved  = 1024
-	setrlimitDef    = 1
-	greylistEnabled = true
+	MainUser       = "greyd"
+	Backlog        = 10
+	NumBlacklists  = 10
+	IPPortReserved = 1024
 )
 
 // Run is the program entry point: it dispatches on the process role.
-func Run(args []string, stderr io.Writer) int {
+func Run(args []string, stdout, stderr io.Writer) int {
 	maxFiles, err := privs.MaxFiles()
 	if err != nil {
 		fmt.Fprintf(stderr, "greyd: %v\n", err)
@@ -68,11 +65,22 @@ func Run(args []string, stderr io.Writer) int {
 		fmt.Fprint(stderr, Usage)
 		return 1
 	}
+	switch {
+	case o.ShowVersion:
+		fmt.Fprintf(stdout, "greyd %s\n", version.Version)
+		return 0
+	case o.ListDrivers:
+		printDrivers(stdout)
+		return 0
+	}
 
-	cfg, err := loadConfig(o)
+	s, err := loadSettings(o)
 	if err != nil {
 		fmt.Fprintf(stderr, "greyd: %v\n", err)
 		return 1
+	}
+	if o.TestConfig {
+		return checkConfig(s, o.ConfigFile, stdout)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
@@ -81,27 +89,29 @@ func Run(args []string, stderr io.Writer) int {
 
 	switch procs.Role() {
 	case RoleFirewall:
-		setupLogging(cfg, stderr)
+		log, h := newLogger(s, stderr)
+		defer h.Close()
 		files, err := inheritedFwFiles()
 		if err != nil {
-			logger.Error("%v", err)
+			log.Error(err.Error())
 			return 1
 		}
-		if err := runFwChild(ctx, cfg, files); err != nil {
-			logger.Error("firewall process: %v", err)
+		if err := runFwChild(ctx, s, files, log); err != nil {
+			log.Error("firewall process failed", "err", err)
 			return 1
 		}
 		return 0
 
 	case RoleGrey:
-		setupLogging(cfg, stderr)
+		log, h := newLogger(s, stderr)
+		defer h.Close()
 		files, err := inheritedGreyFiles()
 		if err != nil {
-			logger.Error("%v", err)
+			log.Error(err.Error())
 			return 1
 		}
-		if err := runGreyChild(ctx, cfg, files); err != nil {
-			logger.Error("greylister: %v", err)
+		if err := runGreyChild(ctx, s, files, log); err != nil {
+			log.Error("greylister failed", "err", err)
 			return 1
 		}
 		return 0
@@ -109,35 +119,39 @@ func Run(args []string, stderr io.Writer) int {
 
 	// Parent: detach first so that sockets and pipes are created in the
 	// final process (Go cannot fork after binding, unlike daemon(3)).
-	if cfg.Bool("daemonize", "", true) {
+	if s.Daemonize {
 		if err := privs.Daemonize(true); err != nil {
 			fmt.Fprintf(stderr, "greyd: %v\n", err)
 			return 1
 		}
 	}
-	setupLogging(cfg, stderr)
-	logger.Info("greyd %s starting", version.Version)
+	log, h := newLogger(s, stderr)
+	defer h.Close()
+	log.Info("greyd starting", "version", version.Version)
+	for _, w := range s.Warnings {
+		log.Warn(w)
+	}
 
-	d, err := newDaemon(cfg, o, maxFiles)
+	d, err := newDaemon(s, o, maxFiles, log)
 	if err != nil {
-		logger.Error("%v", err)
+		log.Error(err.Error())
 		return 1
 	}
 	if err := d.bind(); err != nil {
-		logger.Error("%v", err)
+		log.Error(err.Error())
 		return 1
 	}
 	if err := d.serve(ctx, spawnChildren); err != nil {
-		logger.Error("%v", err)
+		log.Error(err.Error())
 		return 1
 	}
 	return 0
 }
 
-// loadConfig reads the configuration file and merges the switches over
-// it. The hostname defaults to the system's when neither the file nor -h
-// sets it.
-func loadConfig(o Options) (*config.Config, error) {
+// loadSettings reads the configuration file, merges the switches over it
+// and decodes the result. The hostname defaults to the system's when
+// neither the file nor -h sets it.
+func loadSettings(o Options) (*settings.Settings, error) {
 	cfg := config.New()
 	if err := cfg.LoadFile(o.ConfigFile); err != nil {
 		return nil, err
@@ -150,17 +164,63 @@ func loadConfig(o Options) (*config.Config, error) {
 		}
 		cfg.SetStr("hostname", "", h)
 	}
-	return cfg, nil
+	return settings.Load(cfg)
 }
 
-func setupLogging(cfg *config.Config, stderr io.Writer) {
-	if err := logger.Setup(logger.Options{
+// newLogger builds the process logger. A syslog failure is reported on
+// stderr by the logger itself and logging continues without it.
+func newLogger(s *settings.Settings, stderr io.Writer) (*slog.Logger, *logger.Handler) {
+	log, h, err := logger.New(logger.Options{
 		Ident:  "greyd",
-		Debug:  cfg.Bool("debug", "", false),
-		Syslog: cfg.Bool("syslog_enable", "", true),
-		File:   cfg.Str("log_to_file", "", ""),
+		Debug:  s.Debug,
+		Syslog: s.SyslogEnable,
+		File:   s.LogToFile,
 		Stderr: stderr,
-	}); err != nil {
+	})
+	if err != nil {
 		fmt.Fprintf(stderr, "greyd: %v\n", err)
 	}
+	return log, h
+}
+
+// checkConfig implements -t: report warnings and driver availability
+// without starting anything.
+func checkConfig(s *settings.Settings, path string, out io.Writer) int {
+	rc := 0
+	for _, w := range s.Warnings {
+		fmt.Fprintf(out, "warning: %s\n", w)
+	}
+	if d := core.NormalizeDriver(s.Database.Driver); d != "" && !contains(core.StoreDrivers(), d) {
+		fmt.Fprintf(out, "error: unknown database driver %q (available: %s)\n", s.Database.Driver, strings.Join(core.StoreDrivers(), ", "))
+		rc = 1
+	}
+	if d := core.NormalizeDriver(s.Firewall.Driver); d != "" && !contains(core.FirewallDrivers(), d) {
+		fmt.Fprintf(out, "error: unknown firewall driver %q (available: %s)\n", s.Firewall.Driver, strings.Join(core.FirewallDrivers(), ", "))
+		rc = 1
+	}
+	if rc == 0 {
+		fmt.Fprintf(out, "%s: configuration OK\n", path)
+	}
+	return rc
+}
+
+// printDrivers implements --drivers.
+func printDrivers(out io.Writer) {
+	fmt.Fprintln(out, "database drivers:")
+	for _, d := range core.StoreDrivers() {
+		fmt.Fprintf(out, "  %s\n", d)
+	}
+	fmt.Fprintln(out, "firewall drivers:")
+	for _, d := range core.FirewallDrivers() {
+		fmt.Fprintf(out, "  %s\n", d)
+	}
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }

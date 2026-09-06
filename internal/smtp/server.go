@@ -19,6 +19,7 @@ package smtp
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/netip"
 	"sync"
@@ -34,6 +35,8 @@ type Server struct {
 	deps     Deps
 	counters *Counters
 
+	log *slog.Logger
+
 	mu    sync.Mutex
 	conns map[*Conn]struct{}
 	wg    sync.WaitGroup
@@ -41,7 +44,7 @@ type Server struct {
 
 // NewServer creates a server.
 func NewServer(cfg Config, deps Deps, counters *Counters) *Server {
-	return &Server{cfg: cfg, deps: deps, counters: counters, conns: make(map[*Conn]struct{})}
+	return &Server{cfg: cfg, deps: deps, counters: counters, conns: make(map[*Conn]struct{}), log: logger.Or(deps.Log)}
 }
 
 // ServeListener accepts connections until ctx is done or the listener
@@ -76,6 +79,14 @@ func (s *Server) ServeListener(ctx context.Context, l net.Listener) error {
 			_ = conn.Close()
 			continue
 		}
+		if s.cfg.MaxConsPerSource > 0 {
+			src := addrPortOf(conn.RemoteAddr()).Addr().Unmap()
+			if s.counters.SourceCount(src) >= s.cfg.MaxConsPerSource {
+				s.log.Warn("too many connections from source; dropping", "client", src, "limit", s.cfg.MaxConsPerSource)
+				_ = conn.Close()
+				continue
+			}
+		}
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -92,9 +103,9 @@ func (s *Server) Handle(conn net.Conn) {
 
 	clients, black, _, _ := s.counters.Snapshot()
 	if c.black {
-		logger.Info("%s: connected (%d/%d), lists: %s", c.SrcAddr, clients, black, c.ListSummary)
+		c.log.Info("connected", "clients", clients, "black", black, "lists", c.ListSummary)
 	} else {
-		logger.Info("%s: connected (%d/%d)", c.SrcAddr, clients, black)
+		c.log.Info("connected", "clients", clients, "black", black)
 	}
 
 	s.mu.Lock()

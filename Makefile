@@ -108,9 +108,11 @@ lint: vet
 	@if command -v staticcheck >/dev/null 2>&1; then staticcheck ./...; else echo "staticcheck not installed; skipping"; fi
 
 test: vet
-	$(GO) test -race ./...
+	$(GO) test ./...
 
-test-race: test
+# The race detector needs cgo; everything else is built without it.
+test-race: vet
+	CGO_ENABLED=1 $(GO) test -race ./...
 
 # Runs the MySQL & PostgreSQL driver tests against throw-away containers.
 test-db-docker:

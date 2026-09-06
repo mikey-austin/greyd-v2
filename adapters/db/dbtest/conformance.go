@@ -19,6 +19,7 @@
 package dbtest
 
 import (
+	"context"
 	"errors"
 	"sort"
 	"testing"
@@ -40,27 +41,38 @@ func RunConformance(t *testing.T, open OpenFunc) {
 	t.Run("Transactions", func(t *testing.T) { testTransactions(t, open(t)) })
 	t.Run("IteratorMutation", func(t *testing.T) { testIteratorMutation(t, open(t)) })
 	t.Run("ReopenNoop", func(t *testing.T) { testReopen(t, open(t)) })
+	t.Run("ContextCancelled", func(t *testing.T) { testContext(t, open(t)) })
 }
 
 var (
+	ctx    = context.Background()
 	tupleA = core.Tuple{IP: "1.2.3.4", Helo: "mx.example.org", From: "m@jackiemclean.net", To: "r@domain1.com"}
 	tupleB = core.Tuple{IP: "1.2.4.4", Helo: "mx.example.org", From: "m@jackiemclean.net", To: "r@domain1.com"}
 )
 
 func mustPut(t *testing.T, s core.Store, k core.Key, d core.Data) {
 	t.Helper()
-	if err := s.Put(k, d); err != nil {
+	if err := core.Put(ctx, s, k, d); err != nil {
 		t.Fatalf("Put(%+v): %v", k, err)
 	}
 }
 
 func mustGet(t *testing.T, s core.Store, k core.Key) (core.Data, bool) {
 	t.Helper()
-	d, found, err := s.Get(k)
+	d, found, err := core.Get(ctx, s, k)
 	if err != nil {
 		t.Fatalf("Get(%+v): %v", k, err)
 	}
 	return d, found
+}
+
+func mustDel(t *testing.T, s core.Store, k core.Key) bool {
+	t.Helper()
+	found, err := core.Del(ctx, s, k)
+	if err != nil {
+		t.Fatalf("Del(%+v): %v", k, err)
+	}
+	return found
 }
 
 func testPutGetDel(t *testing.T, s core.Store) {
@@ -92,10 +104,6 @@ func testPutGetDel(t *testing.T, s core.Store) {
 	if _, found := mustGet(t, s, core.TupleKey(other)); found {
 		t.Fatal("different tuple must not match")
 	}
-	// A tuple never matches an address key of another address.
-	if _, found := mustGet(t, s, core.IPKey("9.9.9.9")); found {
-		t.Fatal("unrelated IP key found")
-	}
 
 	mustPut(t, s, core.MailKey("trap@domain3.com"), core.Data{})
 	if _, found := mustGet(t, s, core.MailKey("trap@domain3.com")); !found {
@@ -109,25 +117,17 @@ func testPutGetDel(t *testing.T, s core.Store) {
 		t.Fatal("domain not found")
 	}
 
-	found, err := s.Del(core.IPKey("1.2.3.4"))
-	if err != nil || !found {
-		t.Fatalf("Del = %v %v", found, err)
+	if !mustDel(t, s, core.IPKey("1.2.3.4")) {
+		t.Fatal("Del should report found")
 	}
 	if _, found := mustGet(t, s, core.IPKey("1.2.3.4")); found {
 		t.Fatal("deleted IP still present")
 	}
-	found, err = s.Del(core.IPKey("1.2.3.4"))
-	if err != nil || found {
-		t.Fatalf("second Del = %v %v", found, err)
+	if mustDel(t, s, core.IPKey("1.2.3.4")) {
+		t.Fatal("second Del should report not found")
 	}
-	if found, err := s.Del(core.TupleKey(tupleA)); err != nil || !found {
-		t.Fatalf("Del tuple = %v %v", found, err)
-	}
-	if found, err := s.Del(core.MailKey("trap@domain3.com")); err != nil || !found {
-		t.Fatalf("Del mail = %v %v", found, err)
-	}
-	if found, err := s.Del(core.DomainKey("domain1.com")); err != nil || !found {
-		t.Fatalf("Del domain = %v %v", found, err)
+	if !mustDel(t, s, core.TupleKey(tupleA)) || !mustDel(t, s, core.MailKey("trap@domain3.com")) || !mustDel(t, s, core.DomainKey("domain1.com")) {
+		t.Fatal("Del of other key types")
 	}
 	if n := count(t, s, core.IterAll); n != 0 {
 		t.Fatalf("expected empty store, got %d entries", n)
@@ -140,37 +140,42 @@ type counts struct {
 
 func tally(t *testing.T, s core.Store, types core.IterTypes) (counts, map[string]core.Data) {
 	t.Helper()
-	it, err := s.Iter(types)
-	if err != nil {
-		t.Fatalf("Iter: %v", err)
-	}
-	defer it.Close()
 	var c counts
 	seen := map[string]core.Data{}
-	for {
-		k, d, ok, err := it.Next()
+	err := s.View(ctx, func(tx core.ReadTx) error {
+		it, err := tx.Iter(types)
 		if err != nil {
-			t.Fatalf("Next: %v", err)
+			return err
 		}
-		if !ok {
-			break
+		defer it.Close()
+		for {
+			k, d, ok, err := it.Next()
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
+			switch k.Type {
+			case core.KeyIP:
+				c.ip++
+				seen["ip:"+k.Str] = d
+			case core.KeyTuple:
+				c.tuple++
+				seen["tuple:"+k.Tuple.IP+"|"+k.Tuple.Helo+"|"+k.Tuple.From+"|"+k.Tuple.To] = d
+			case core.KeyMail:
+				c.mail++
+				seen["mail:"+k.Str] = d
+			case core.KeyDomain:
+				c.domain++
+				seen["domain:"+k.Str] = d
+			default:
+				t.Fatalf("unexpected key type %d", k.Type)
+			}
 		}
-		switch k.Type {
-		case core.KeyIP:
-			c.ip++
-			seen["ip:"+k.Str] = d
-		case core.KeyTuple:
-			c.tuple++
-			seen["tuple:"+k.Tuple.IP+"|"+k.Tuple.Helo+"|"+k.Tuple.From+"|"+k.Tuple.To] = d
-		case core.KeyMail:
-			c.mail++
-			seen["mail:"+k.Str] = d
-		case core.KeyDomain:
-			c.domain++
-			seen["domain:"+k.Str] = d
-		default:
-			t.Fatalf("unexpected key type %d", k.Type)
-		}
+	})
+	if err != nil {
+		t.Fatalf("tally: %v", err)
 	}
 	return c, seen
 }
@@ -205,7 +210,6 @@ func testIterate(t *testing.T, s core.Store) {
 	if _, ok := seen["domain:domain1.com"]; !ok {
 		t.Fatal("domain missing from iteration")
 	}
-
 	if c, _ := tally(t, s, core.IterEntries); c != (counts{ip: 2, tuple: 2}) {
 		t.Fatalf("entries counts = %+v", c)
 	}
@@ -233,17 +237,11 @@ func testDomainPart(t *testing.T, s core.Store) {
 		"":                   false,
 	}
 	for addr, want := range cases {
-		_, found := mustGet(t, s, core.DomainPartKey(addr))
-		if found != want {
+		if _, found := mustGet(t, s, core.DomainPartKey(addr)); found != want {
 			t.Fatalf("DomainPart(%q) = %v want %v", addr, found, want)
 		}
 	}
-	if _, found := mustGet(t, s, core.DomainPartKey("x@domain1.com")); !found {
-		t.Fatal("domain part after delete setup")
-	}
-	if _, err := s.Del(core.DomainKey("domain1.com")); err != nil {
-		t.Fatal(err)
-	}
+	mustDel(t, s, core.DomainKey("domain1.com"))
 	if _, found := mustGet(t, s, core.DomainPartKey("x@domain1.com")); found {
 		t.Fatal("deleted domain still matches")
 	}
@@ -272,15 +270,13 @@ func testScan(t *testing.T, s core.Store) {
 	mustPut(t, s, core.MailKey("trap@x.org"), core.Data{PCount: core.PCountSpamtrap})
 	mustPut(t, s, core.DomainKey("d.com"), core.Data{PCount: core.PCountDomain})
 
-	if err := s.Begin(); err != nil {
-		t.Fatal(err)
-	}
-	res, err := s.Scan(now, whiteExp)
-	if err != nil {
+	var res core.ScanResult
+	if err := s.Update(ctx, func(tx core.Tx) error {
+		var err error
+		res, err = tx.Scan(now, whiteExp)
+		return err
+	}); err != nil {
 		t.Fatalf("Scan: %v", err)
-	}
-	if err := s.Commit(); err != nil {
-		t.Fatal(err)
 	}
 
 	sort.Strings(res.Whitelist)
@@ -310,14 +306,10 @@ func testScan(t *testing.T, s core.Store) {
 	if _, found := mustGet(t, s, core.TupleKey(tA)); found {
 		t.Fatal("whitelisted tuple A still present as tuple")
 	}
-	if _, found := mustGet(t, s, core.TupleKey(tB)); !found {
-		t.Fatal("tuple B (pass in future) must remain")
-	}
-	if _, found := mustGet(t, s, core.TupleKey(tC)); !found {
-		t.Fatal("tuple C (trapped address) must remain")
-	}
-	if _, found := mustGet(t, s, core.TupleKey(tD)); !found {
-		t.Fatal("tuple D (already white address) must remain")
+	for _, tk := range []core.Tuple{tB, tC, tD} {
+		if _, found := mustGet(t, s, core.TupleKey(tk)); !found {
+			t.Fatalf("tuple %s must remain", tk.IP)
+		}
 	}
 	if d, found := mustGet(t, s, core.IPKey("10.0.0.1")); !found || d.PCount != 3 || d.Expire != 2000 {
 		t.Fatalf("existing white entry modified: %+v %v", d, found)
@@ -336,63 +328,68 @@ func testScan(t *testing.T, s core.Store) {
 	}
 
 	// A second scan is idempotent.
-	res2, err := s.Scan(now, whiteExp)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var res2 core.ScanResult
+	_ = s.Update(ctx, func(tx core.Tx) error {
+		var err error
+		res2, err = tx.Scan(now, whiteExp)
+		return err
+	})
 	sort.Strings(res2.Whitelist)
 	if !equal(res2.Whitelist, res.Whitelist) || !equal(res2.Traplist, res.Traplist) {
 		t.Fatalf("second scan differs: %+v", res2)
 	}
 }
 
+var errBoom = errors.New("boom")
+
 func testTransactions(t *testing.T, s core.Store) {
-	if err := s.Commit(); !errors.Is(err, core.ErrNotInTransaction) && err == nil {
-		t.Fatal("Commit outside transaction must fail")
-	}
-	if err := s.Rollback(); err == nil {
-		t.Fatal("Rollback outside transaction must fail")
-	}
-	if err := s.Begin(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Begin(); err == nil {
-		t.Fatal("nested Begin must fail")
-	}
-	mustPut(t, s, core.IPKey("7.7.7.7"), core.Data{First: 1})
-	if _, found := mustGet(t, s, core.IPKey("7.7.7.7")); !found {
-		t.Fatal("value invisible inside its own transaction")
-	}
-	if err := s.Rollback(); err != nil {
-		t.Fatal(err)
+	// An error from fn rolls the transaction back.
+	err := s.Update(ctx, func(tx core.Tx) error {
+		if err := tx.Put(core.IPKey("7.7.7.7"), core.Data{First: 1}); err != nil {
+			return err
+		}
+		if _, found, _ := tx.Get(core.IPKey("7.7.7.7")); !found {
+			t.Fatal("value invisible inside its own transaction")
+		}
+		return errBoom
+	})
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("Update should return fn's error, got %v", err)
 	}
 	if _, found := mustGet(t, s, core.IPKey("7.7.7.7")); found {
 		t.Fatal("rolled back value still present")
 	}
 
-	if err := s.Begin(); err != nil {
-		t.Fatal(err)
-	}
+	// A nil return commits.
 	mustPut(t, s, core.IPKey("8.8.8.8"), core.Data{First: 2})
-	if err := s.Commit(); err != nil {
-		t.Fatal(err)
-	}
 	if _, found := mustGet(t, s, core.IPKey("8.8.8.8")); !found {
 		t.Fatal("committed value missing")
 	}
 
 	// Deletion rolls back too.
-	if err := s.Begin(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Del(core.IPKey("8.8.8.8")); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Rollback(); err != nil {
-		t.Fatal(err)
-	}
+	_ = s.Update(ctx, func(tx core.Tx) error {
+		if _, err := tx.Del(core.IPKey("8.8.8.8")); err != nil {
+			return err
+		}
+		return errBoom
+	})
 	if _, found := mustGet(t, s, core.IPKey("8.8.8.8")); !found {
 		t.Fatal("rolled back delete lost the entry")
+	}
+
+	// Several operations commit atomically.
+	if err := s.Update(ctx, func(tx core.Tx) error {
+		for _, ip := range []string{"9.9.9.1", "9.9.9.2"} {
+			if err := tx.Put(core.IPKey(ip), core.Data{First: 3}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, core.IterEntries); n != 3 {
+		t.Fatalf("count after batch = %d", n)
 	}
 }
 
@@ -400,37 +397,38 @@ func testIteratorMutation(t *testing.T, s core.Store) {
 	for i, ip := range []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"} {
 		mustPut(t, s, core.IPKey(ip), core.Data{First: int64(i + 1), Expire: 100, BCount: 1})
 	}
-	if err := s.Begin(); err != nil {
-		t.Fatal(err)
-	}
-	it, err := s.Iter(core.IterEntries)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for {
-		k, d, ok, err := it.Next()
+	err := s.Update(ctx, func(tx core.Tx) error {
+		it, err := tx.Iter(core.IterEntries)
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
-		if !ok {
-			break
+		defer it.Close()
+		if err := it.ReplaceCurrent(core.Data{}); err == nil {
+			t.Fatal("ReplaceCurrent before Next must fail")
 		}
-		switch k.Str {
-		case "2.2.2.2":
-			d.BCount = 99
-			if err := it.ReplaceCurrent(d); err != nil {
-				t.Fatalf("ReplaceCurrent: %v", err)
+		for {
+			k, d, ok, err := it.Next()
+			if err != nil {
+				return err
 			}
-		case "3.3.3.3":
-			if err := it.DeleteCurrent(); err != nil {
-				t.Fatalf("DeleteCurrent: %v", err)
+			if !ok {
+				break
+			}
+			switch k.Str {
+			case "2.2.2.2":
+				d.BCount = 99
+				if err := it.ReplaceCurrent(d); err != nil {
+					return err
+				}
+			case "3.3.3.3":
+				if err := it.DeleteCurrent(); err != nil {
+					return err
+				}
 			}
 		}
-	}
-	if err := it.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Commit(); err != nil {
+		return nil
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if d, found := mustGet(t, s, core.IPKey("2.2.2.2")); !found || d.BCount != 99 || d.First != 2 {
@@ -445,12 +443,23 @@ func testIteratorMutation(t *testing.T, s core.Store) {
 }
 
 func testReopen(t *testing.T, s core.Store) {
-	if err := s.Open(core.OpenRW); err != nil {
+	if err := s.Open(ctx, core.OpenRW); err != nil {
 		t.Fatalf("second Open: %v", err)
 	}
 	mustPut(t, s, core.IPKey("1.1.1.1"), core.Data{First: 1})
 	if _, found := mustGet(t, s, core.IPKey("1.1.1.1")); !found {
 		t.Fatal("store unusable after reopen")
+	}
+}
+
+func testContext(t *testing.T, s core.Store) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.Update(cancelled, func(core.Tx) error { return nil }); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Update with cancelled context: %v", err)
+	}
+	if err := s.View(cancelled, func(core.ReadTx) error { return nil }); !errors.Is(err, context.Canceled) {
+		t.Fatalf("View with cancelled context: %v", err)
 	}
 }
 

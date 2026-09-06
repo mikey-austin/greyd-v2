@@ -18,6 +18,7 @@ package mysql
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"strconv"
@@ -32,6 +33,8 @@ import (
 // dsnEnv names the variable holding a go-sql-driver DSN of a throw-away
 // database (see packages/docker/docker-compose.test.yml).
 const dsnEnv = "GREYD_TEST_MYSQL_DSN"
+
+var ctx = context.Background()
 
 func testConfig(t *testing.T) *config.Config {
 	t.Helper()
@@ -71,13 +74,12 @@ func openEmpty(t *testing.T) core.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Open(core.OpenRW); err != nil {
+	if err := s.Open(ctx, core.OpenRW); err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	conn := s.(*Store).Conn()
 	for _, table := range []string{"entries", "spamtraps", "domains"} {
-		if _, err := conn.ExecContext(context.Background(), "DELETE FROM "+table); err != nil {
+		if _, err := s.(*Store).Exec(ctx, "DELETE FROM "+table); err != nil {
 			t.Fatalf("truncate %s: %v", table, err)
 		}
 	}
@@ -91,27 +93,32 @@ func TestConformance(t *testing.T) {
 func TestHostScoping(t *testing.T) {
 	s := openEmpty(t)
 	other := New(testConfig(t), core.StoreOptions{Hostname: "other-host"})
-	if err := other.Open(core.OpenRW); err != nil {
+	if err := other.Open(ctx, core.OpenRW); err != nil {
 		t.Fatal(err)
 	}
 	defer other.Close()
 
 	// Expired rows of another host survive this host's scan; the
 	// whitelist select is not scoped.
-	if err := other.Put(core.IPKey("10.9.9.9"), core.Data{Expire: 10, PCount: 1}); err != nil {
+	if err := core.Put(ctx, other, core.IPKey("10.9.9.9"), core.Data{Expire: 10, PCount: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put(core.IPKey("10.9.9.8"), core.Data{Expire: 10, PCount: 1}); err != nil {
+	if err := core.Put(ctx, s, core.IPKey("10.9.9.8"), core.Data{Expire: 10, PCount: 1}); err != nil {
 		t.Fatal(err)
 	}
-	res, err := s.Scan(1000, 100)
+	var res core.ScanResult
+	err := s.Update(ctx, func(tx core.Tx) error {
+		var err error
+		res, err = tx.Scan(1000, 100)
+		return err
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, found, _ := s.Get(core.IPKey("10.9.9.9")); !found {
+	if _, found, _ := core.Get(ctx, s, core.IPKey("10.9.9.9")); !found {
 		t.Fatal("scan deleted another host's row")
 	}
-	if _, found, _ := s.Get(core.IPKey("10.9.9.8")); found {
+	if _, found, _ := core.Get(ctx, s, core.IPKey("10.9.9.8")); found {
 		t.Fatal("scan kept an expired row of this host")
 	}
 	if len(res.Whitelist) != 1 || res.Whitelist[0] != "10.9.9.9" {
@@ -119,9 +126,27 @@ func TestHostScoping(t *testing.T) {
 	}
 }
 
+func TestReadOnly(t *testing.T) {
+	s := openEmpty(t)
+	if err := core.Put(ctx, s, core.IPKey("5.5.5.5"), core.Data{First: 7}); err != nil {
+		t.Fatal(err)
+	}
+	ro := New(testConfig(t), core.StoreOptions{Hostname: "conformance"})
+	if err := ro.Open(ctx, core.OpenRO); err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	if d, found, err := core.Get(ctx, ro, core.IPKey("5.5.5.5")); err != nil || !found || d.First != 7 {
+		t.Fatalf("Get in RO = %+v %v %v", d, found, err)
+	}
+	if err := ro.Update(ctx, func(core.Tx) error { return nil }); !errors.Is(err, core.ErrReadOnly) {
+		t.Fatalf("Update on a read-only store = %v, want ErrReadOnly", err)
+	}
+}
+
 func TestOpenTwiceIsNoop(t *testing.T) {
 	s := openEmpty(t)
-	if err := s.Open(core.OpenRW); err != nil {
+	if err := s.Open(ctx, core.OpenRW); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
@@ -129,6 +154,9 @@ func TestOpenTwiceIsNoop(t *testing.T) {
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if err := s.View(ctx, func(core.ReadTx) error { return nil }); !errors.Is(err, core.ErrNotOpen) {
+		t.Fatalf("View on a closed store = %v, want ErrNotOpen", err)
 	}
 }
 

@@ -27,5 +27,5 @@ import (
 )
 
 func main() {
-	os.Exit(greyd.Run(os.Args[1:], os.Stderr))
+	os.Exit(greyd.Run(os.Args[1:], os.Stdout, os.Stderr))
 }

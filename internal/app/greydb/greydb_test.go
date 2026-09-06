@@ -216,10 +216,11 @@ func TestSyncTarget(t *testing.T) {
 		t.Fatalf("no sync packet received: %v", err)
 	}
 	var key sync.Key
-	entries, err := sync.Decode(&key, buf[:n])
+	pkt, err := sync.Decode(&key, buf[:n])
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	entries := pkt.Entries
 	if len(entries) != 1 {
 		t.Fatalf("got %d entries, want 1", len(entries))
 	}

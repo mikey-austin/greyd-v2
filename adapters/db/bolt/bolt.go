@@ -20,12 +20,18 @@
 // holding the entries, spamtraps and domains buckets, with the key and
 // value encodings and the scan algorithm shared with the memory driver
 // through package kv.
+//
+// View and Update map directly onto bbolt's read and write transactions.
+// bbolt allows one writer at a time, so calling Update from within a
+// transaction function is not supported (it would block forever).
 package bolt
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -36,6 +42,7 @@ import (
 	"github.com/mikey-austin/greyd-golang/adapters/db/kv"
 	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
+	"github.com/mikey-austin/greyd-golang/internal/logger"
 )
 
 // DriverName is the configuration driver value.
@@ -52,12 +59,8 @@ const (
 	lockTimeout = 5 * time.Second
 )
 
-var (
-	errNotOpen   = errors.New("bolt: database not open")
-	errNoCurrent = errors.New("bolt: iterator has no current entry")
-	// errStop ends a ForEach walk early.
-	errStop = errors.New("stop")
-)
+// errStop ends a ForEach walk early.
+var errStop = errors.New("stop")
 
 func init() {
 	core.RegisterStore(DriverName, func(cfg *config.Config, opts core.StoreOptions) (core.Store, error) {
@@ -91,15 +94,14 @@ func New(cfg *config.Config, opts core.StoreOptions) (*Store, error) {
 		}
 	}
 
-	return &Store{path: filepath.Join(dir, name)}, nil
+	return &Store{path: filepath.Join(dir, name), log: logger.Or(opts.Log)}, nil
 }
 
 // Store is a bbolt backed core.Store. It is not safe for concurrent use.
 type Store struct {
 	path string
+	log  *slog.Logger
 	db   *bbolt.DB
-	// tx is the explicit transaction opened by Begin, nil otherwise.
-	tx *bbolt.Tx
 }
 
 // Path returns the database file path.
@@ -107,7 +109,10 @@ func (s *Store) Path() string { return s.path }
 
 // Open opens the database file, creating it and the buckets in read-write
 // mode. Opening an already open store is a no-op.
-func (s *Store) Open(mode core.OpenMode) error {
+func (s *Store) Open(ctx context.Context, mode core.OpenMode) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.db != nil {
 		return nil
 	}
@@ -137,209 +142,179 @@ func (s *Store) Open(mode core.OpenMode) error {
 	return nil
 }
 
-// Close rolls back any open transaction and closes the file.
+// Close closes the file. Closing an unopened store is a no-op.
 func (s *Store) Close() error {
 	if s.db == nil {
 		return nil
-	}
-	if s.tx != nil {
-		_ = s.tx.Rollback()
-		s.tx = nil
 	}
 	err := s.db.Close()
 	s.db = nil
 	return err
 }
 
-// Begin starts an explicit transaction: writable unless the store was
-// opened read-only.
-func (s *Store) Begin() error {
+// View runs fn in a read transaction.
+func (s *Store) View(ctx context.Context, fn func(core.ReadTx) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.db == nil {
-		return errNotOpen
+		return core.ErrNotOpen
 	}
-	if s.tx != nil {
-		return core.ErrInTransaction
-	}
-	tx, err := s.db.Begin(!s.db.IsReadOnly())
+	btx, err := s.db.Begin(false)
 	if err != nil {
 		return err
 	}
-	s.tx = tx
-	return nil
+	defer s.rollback(btx)
+	return fn(&tx{btx: btx})
 }
 
-// Commit finishes the explicit transaction. A read-only transaction has
-// nothing to write and is simply released.
-func (s *Store) Commit() error {
-	if s.tx == nil {
-		return core.ErrNotInTransaction
+// Update runs fn in a write transaction, committing when fn returns nil
+// and rolling back otherwise. A store opened read-only refuses it.
+func (s *Store) Update(ctx context.Context, fn func(core.Tx) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	tx := s.tx
-	s.tx = nil
-	if !tx.Writable() {
-		return tx.Rollback()
-	}
-	return tx.Commit()
-}
-
-// Rollback discards the explicit transaction.
-func (s *Store) Rollback() error {
-	if s.tx == nil {
-		return core.ErrNotInTransaction
-	}
-	tx := s.tx
-	s.tx = nil
-	return tx.Rollback()
-}
-
-// update runs fn inside the explicit transaction when there is one,
-// otherwise in a short writable transaction of its own.
-func (s *Store) update(fn func(tx *bbolt.Tx) error) error {
 	if s.db == nil {
-		return errNotOpen
+		return core.ErrNotOpen
 	}
-	if s.tx != nil {
-		return fn(s.tx)
+	if s.db.IsReadOnly() {
+		return core.ErrReadOnly
 	}
-	return s.db.Update(fn)
+	btx, err := s.db.Begin(true)
+	if err != nil {
+		return err
+	}
+	if err := fn(&tx{btx: btx}); err != nil {
+		s.rollback(btx)
+		return err
+	}
+	// A failed Commit rolls the transaction back itself.
+	return btx.Commit()
 }
 
-// view is the read-only counterpart of update.
-func (s *Store) view(fn func(tx *bbolt.Tx) error) error {
-	if s.db == nil {
-		return errNotOpen
+func (s *Store) rollback(btx *bbolt.Tx) {
+	if err := btx.Rollback(); err != nil {
+		s.log.Warn("bolt rollback failed", "err", err, "path", s.path)
 	}
-	if s.tx != nil {
-		return fn(s.tx)
-	}
-	return s.db.View(fn)
 }
 
 // bucket returns the named bucket, which is nil only for a read-only open
 // of a file that was never initialised.
-func bucket(tx *bbolt.Tx, b kv.Bucket) *bbolt.Bucket {
-	return tx.Bucket([]byte(b))
+func bucket(btx *bbolt.Tx, b kv.Bucket) *bbolt.Bucket {
+	return btx.Bucket([]byte(b))
 }
 
-func mustBucket(tx *bbolt.Tx, b kv.Bucket) (*bbolt.Bucket, error) {
-	bk := bucket(tx, b)
+func mustBucket(btx *bbolt.Tx, b kv.Bucket) (*bbolt.Bucket, error) {
+	bk := bucket(btx, b)
 	if bk == nil {
 		return nil, fmt.Errorf("bolt: bucket %s does not exist", b)
 	}
 	return bk, nil
 }
 
-func (s *Store) Put(k core.Key, d core.Data) error {
-	return s.update(func(tx *bbolt.Tx) error {
-		bk, err := mustBucket(tx, kv.BucketFor(k.Type))
-		if err != nil {
-			return err
-		}
-		return bk.Put(kv.EncodeKey(k), kv.EncodeData(d))
-	})
+// tx implements core.Tx over a bbolt transaction; a read transaction
+// refuses writes.
+type tx struct {
+	btx *bbolt.Tx
 }
 
-func (s *Store) Get(k core.Key) (core.Data, bool, error) {
-	var (
-		d     core.Data
-		found bool
-	)
-	err := s.view(func(tx *bbolt.Tx) error {
-		bk := bucket(tx, kv.BucketFor(k.Type))
-		if bk == nil {
-			return nil
-		}
-		if k.Type == core.KeyDomainPart {
-			err := bk.ForEach(func(raw, _ []byte) error {
-				dk, err := kv.DecodeKey(raw)
-				if err != nil {
-					return err
-				}
-				if kv.DomainMatches(dk.Str, k.Str) {
-					d = core.Data{PCount: core.PCountDomain}
-					found = true
-					return errStop
-				}
-				return nil
-			})
-			if errors.Is(err, errStop) {
-				return nil
+func (t *tx) Put(k core.Key, d core.Data) error {
+	if !t.btx.Writable() {
+		return core.ErrReadOnly
+	}
+	bk, err := mustBucket(t.btx, kv.BucketFor(k.Type))
+	if err != nil {
+		return err
+	}
+	return bk.Put(kv.EncodeKey(k), kv.EncodeData(d))
+}
+
+func (t *tx) Get(k core.Key) (core.Data, bool, error) {
+	bk := bucket(t.btx, kv.BucketFor(k.Type))
+	if bk == nil {
+		return core.Data{}, false, nil
+	}
+	if k.Type == core.KeyDomainPart {
+		err := bk.ForEach(func(raw, _ []byte) error {
+			dk, err := kv.DecodeKey(raw)
+			if err != nil {
+				return err
 			}
-			return err
-		}
-		v := bk.Get(kv.EncodeKey(k))
-		if v == nil {
+			if kv.DomainMatches(dk.Str, k.Str) {
+				return errStop
+			}
 			return nil
+		})
+		switch {
+		case errors.Is(err, errStop):
+			return core.Data{PCount: core.PCountDomain}, true, nil
+		case err != nil:
+			return core.Data{}, false, err
+		default:
+			return core.Data{}, false, nil
 		}
-		var err error
-		d, err = kv.DecodeData(v)
-		if err != nil {
-			return err
-		}
-		found = true
-		return nil
-	})
+	}
+	v := bk.Get(kv.EncodeKey(k))
+	if v == nil {
+		return core.Data{}, false, nil
+	}
+	d, err := kv.DecodeData(v)
 	if err != nil {
 		return core.Data{}, false, err
 	}
-	return d, found, nil
+	return d, true, nil
 }
 
-func (s *Store) Del(k core.Key) (bool, error) {
-	var found bool
-	err := s.update(func(tx *bbolt.Tx) error {
-		bk, err := mustBucket(tx, kv.BucketFor(k.Type))
-		if err != nil {
-			return err
-		}
-		ek := kv.EncodeKey(k)
-		if bk.Get(ek) == nil {
-			return nil
-		}
-		found = true
-		return bk.Delete(ek)
-	})
-	return found && err == nil, err
+func (t *tx) Del(k core.Key) (bool, error) {
+	if !t.btx.Writable() {
+		return false, core.ErrReadOnly
+	}
+	bk, err := mustBucket(t.btx, kv.BucketFor(k.Type))
+	if err != nil {
+		return false, err
+	}
+	ek := kv.EncodeKey(k)
+	if bk.Get(ek) == nil {
+		return false, nil
+	}
+	return true, bk.Delete(ek)
 }
 
 // Iter snapshots the keys of the selected buckets. Entries are looked up
 // again on Next so that deletions made during the walk are honoured and
 // no bbolt cursor is held while the buckets are mutated.
-func (s *Store) Iter(types core.IterTypes) (core.Iterator, error) {
-	it := &iterator{s: s, pos: -1}
-	err := s.view(func(tx *bbolt.Tx) error {
-		for _, sel := range []struct {
-			t core.IterTypes
-			b kv.Bucket
-		}{{core.IterEntries, kv.BucketEntries}, {core.IterSpamtraps, kv.BucketSpamtraps}, {core.IterDomains, kv.BucketDomains}} {
-			if types&sel.t == 0 {
-				continue
-			}
-			bk := bucket(tx, sel.b)
-			if bk == nil {
-				continue
-			}
-			if err := bk.ForEach(func(k, _ []byte) error {
-				it.keys = append(it.keys, append([]byte(nil), k...))
-				return nil
-			}); err != nil {
-				return err
-			}
+func (t *tx) Iter(types core.IterTypes) (core.Iterator, error) {
+	it := &iterator{t: t, pos: -1}
+	for _, sel := range []struct {
+		t core.IterTypes
+		b kv.Bucket
+	}{{core.IterEntries, kv.BucketEntries}, {core.IterSpamtraps, kv.BucketSpamtraps}, {core.IterDomains, kv.BucketDomains}} {
+		if types&sel.t == 0 {
+			continue
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+		bk := bucket(t.btx, sel.b)
+		if bk == nil {
+			continue
+		}
+		if err := bk.ForEach(func(k, _ []byte) error {
+			it.keys = append(it.keys, append([]byte(nil), k...))
+			return nil
+		}); err != nil {
+			return nil, err
+		}
 	}
 	return it, nil
 }
 
-func (s *Store) Scan(now, whiteExp int64) (core.ScanResult, error) {
-	return kv.Scan(s, now, whiteExp)
+func (t *tx) Scan(now, whiteExp int64) (core.ScanResult, error) {
+	if !t.btx.Writable() {
+		return core.ScanResult{}, core.ErrReadOnly
+	}
+	return kv.Scan(t, now, whiteExp)
 }
 
 type iterator struct {
-	s    *Store
+	t    *tx
 	keys [][]byte
 	pos  int
 	curr core.Key
@@ -358,32 +333,17 @@ func (it *iterator) Next() (core.Key, core.Data, bool, error) {
 		if err != nil {
 			return core.Key{}, core.Data{}, false, err
 		}
-		var (
-			d  core.Data
-			ok bool
-		)
-		err = it.s.view(func(tx *bbolt.Tx) error {
-			bk := bucket(tx, kv.BucketFor(k.Type))
-			if bk == nil {
-				return nil
-			}
-			v := bk.Get(raw)
-			if v == nil {
-				return nil // deleted since the snapshot was taken
-			}
-			var err error
-			d, err = kv.DecodeData(v)
-			if err != nil {
-				return err
-			}
-			ok = true
-			return nil
-		})
+		bk := bucket(it.t.btx, kv.BucketFor(k.Type))
+		if bk == nil {
+			continue
+		}
+		v := bk.Get(raw)
+		if v == nil {
+			continue // deleted since the snapshot was taken
+		}
+		d, err := kv.DecodeData(v)
 		if err != nil {
 			return core.Key{}, core.Data{}, false, err
-		}
-		if !ok {
-			continue
 		}
 		it.curr = k
 		it.has = true
@@ -393,16 +353,16 @@ func (it *iterator) Next() (core.Key, core.Data, bool, error) {
 
 func (it *iterator) ReplaceCurrent(d core.Data) error {
 	if !it.has {
-		return errNoCurrent
+		return kv.ErrNoCurrent
 	}
-	return it.s.Put(it.curr, d)
+	return it.t.Put(it.curr, d)
 }
 
 func (it *iterator) DeleteCurrent() error {
 	if !it.has {
-		return errNoCurrent
+		return kv.ErrNoCurrent
 	}
-	_, err := it.s.Del(it.curr)
+	_, err := it.t.Del(it.curr)
 	return err
 }
 

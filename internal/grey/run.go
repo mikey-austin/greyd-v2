@@ -22,20 +22,18 @@ import (
 	"io"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/internal/config/parse"
 	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/logger"
 )
 
-// RunReader consumes messages from in until it is closed or a malformed
-// message arrives (Grey_start_reader). Cancelling ctx makes the loop exit
-// at the next message; the caller should also close the reader to unblock
-// it.
+// RunReader consumes messages from in until it is closed (Grey_start_reader).
+// Malformed or unknown frames are logged and skipped; the framing resyncs
+// at the next terminator. Cancelling ctx makes the loop exit at the next
+// message; the caller should also close the reader to unblock it.
 func (g *Greylister) RunReader(ctx context.Context, in io.Reader) error {
 	r := ipc.NewReader(in)
 	for {
 		if ctx.Err() != nil {
-			logger.Debug("stopping grey reader")
+			g.log.Debug("stopping grey reader")
 			return nil
 		}
 		m, err := r.Next()
@@ -43,21 +41,23 @@ func (g *Greylister) RunReader(ctx context.Context, in io.Reader) error {
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
-			var pe *parse.Error
-			if errors.As(err, &pe) {
-				return err
-			}
 			if ctx.Err() != nil {
 				return nil
 			}
-			logger.Debug("error detected on grey_in: %v", err)
+			var se *ipc.SyntaxError
+			var ie *ipc.IncompleteError
+			if errors.As(err, &se) || errors.As(err, &ie) || errors.Is(err, ipc.ErrUnknownMessage) || errors.Is(err, ipc.ErrFrameTooLarge) {
+				g.log.Warn("ignoring malformed grey message", "err", err)
+				continue
+			}
+			g.log.Debug("error detected on grey_in", "err", err)
 			return err
 		}
-		if err := g.ProcessMessage(m); err != nil {
-			if errors.Is(err, ErrUnknownType) {
-				return err
+		if err := g.ProcessMessage(ctx, m); err != nil {
+			if ctx.Err() != nil {
+				return nil
 			}
-			logger.Warning("grey message failed: %v", err)
+			g.log.Warn("grey message failed", "err", err)
 		}
 	}
 }
@@ -73,8 +73,8 @@ func (g *Greylister) RunScanner(ctx context.Context, interval time.Duration) err
 			return nil
 		case <-t.C:
 		}
-		if err := g.ScanOnce(); err != nil {
-			logger.Warning("db scan failed: %v", err)
+		if err := g.ScanOnce(ctx); err != nil && ctx.Err() == nil {
+			g.log.Warn("db scan failed", "err", err)
 		}
 		t.Reset(interval)
 	}

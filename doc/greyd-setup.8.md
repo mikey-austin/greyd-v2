@@ -52,7 +52,7 @@ with the following list definitions:
 
 The *http* method specified in the above blacklist definitions will instruct **greyd-setup** to fetch the lists using *curl*.
 
-Output is concatenated and sent to a running **greyd**(8). Addresses are sent along with the message **greyd** will give on mail rejection when a matching client connects. The configuration port for **greyd**(8) is found from the *config_port* configuration option in **greyd.conf**(5) (which defaults to port 8026).
+Output is concatenated and sent to a running **greyd**(8). Addresses are sent along with the message **greyd** will give on mail rejection when a matching client connects. The configuration port for **greyd**(8) is found from the *config_port* configuration option in **greyd.conf**(5) (which defaults to port 8026); when *config_socket* is set the unix domain socket at that path is used instead.
 
 **greyd-setup** reads all configuration information from the spamd.conf(5) file.
 

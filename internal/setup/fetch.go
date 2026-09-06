@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/mikey-austin/greyd-golang/internal/config"
+	"github.com/mikey-austin/greyd-golang/internal/settings"
 	"github.com/mikey-austin/greyd-golang/internal/spamdlist"
 )
 
@@ -43,7 +44,7 @@ const (
 // by section, selecting the source as get_parser does in main_greyd_setup.c:
 // "file" (or no method) opens a local file, "http"/"ftp" run curl and
 // "exec" runs the "file" variable as a command line.
-func Open(section *config.Section, cfg *config.Config) (io.ReadCloser, error) {
+func Open(section *config.Section, cfg settings.Setup) (io.ReadCloser, error) {
 	file := section.Str("file", "")
 	if file == "" {
 		return nil, errors.New("No file configuration variables set")
@@ -58,9 +59,12 @@ func Open(section *config.Section, cfg *config.Config) (io.ReadCloser, error) {
 	case method == "" || method == MethodFile:
 		rc, err = os.Open(file)
 	case method == MethodHTTP || method == MethodFTP:
-		curl := cfg.Str("curl_path", "setup", DefaultCurl)
+		curl := cfg.CurlPath
+		if curl == "" {
+			curl = DefaultCurl
+		}
 		args := []string{"-s"}
-		if proxy := cfg.Str("curl_proxy", "setup", ""); proxy != "" {
+		if proxy := cfg.CurlProxy; proxy != "" {
 			args = append(args, "--proxy", proxy)
 		}
 		args = append(args, method+"://"+file)

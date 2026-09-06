@@ -14,13 +14,10 @@ import (
 
 	"github.com/mikey-austin/greyd-golang/internal/blacklist"
 	"github.com/mikey-austin/greyd-golang/internal/config/parse"
+	"github.com/mikey-austin/greyd-golang/internal/core"
 	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/logger"
+	"github.com/mikey-austin/greyd-golang/internal/settings"
 )
-
-func init() {
-	_ = logger.Setup(logger.Options{Ident: "test", Stderr: io.Discard})
-}
 
 var fixedNow = time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
 
@@ -72,7 +69,11 @@ section grey {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return ConfigFrom(cfg)
+	st, err := settings.Load(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ConfigFrom(st)
 }
 
 type harness struct {
@@ -239,9 +240,9 @@ func TestDialogueGreylisted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("grey message: %v", err)
 	}
-	if m.Int("type", "", 0) != ipc.MsgGrey || m.Str("dst_ip", "", "") != "10.0.0.25" ||
-		m.Str("ip", "", "") != "10.10.10.9" || m.Str("helo", "", "") != "greyd.org" ||
-		m.Str("from", "", "") != "mikey@greyd.org" || m.Str("to", "", "") != "info@greyd.org" {
+	g, ok := m.(*ipc.GreyMessage)
+	if !ok || g.DstIP != "10.0.0.25" ||
+		g.Tuple != (core.Tuple{IP: "10.10.10.9", Helo: "greyd.org", From: "mikey@greyd.org", To: "info@greyd.org"}) {
 		t.Fatalf("grey message content wrong: %s", h.greyOut.String())
 	}
 	if cl, _, _, _ := h.counters.Snapshot(); cl != 0 {
@@ -511,7 +512,7 @@ func TestProxyProtocolDialogue(t *testing.T) {
 	<-done
 	_ = client.Close()
 	m, err := ipc.NewReader(bytes.NewReader(h.greyOut.Bytes())).Next()
-	if err != nil || m.Str("dst_ip", "", "") != "192.0.2.99" || m.Str("ip", "", "") != "10.10.10.9" {
+	if g, ok := m.(*ipc.GreyMessage); err != nil || !ok || g.DstIP != "192.0.2.99" || g.Tuple.IP != "10.10.10.9" {
 		t.Fatalf("proxied grey message: %v %s", err, h.greyOut.String())
 	}
 }
@@ -548,6 +549,66 @@ func TestFormatReply(t *testing.T) {
 	if FormatReply(nil, "450", "x") != "" {
 		t.Fatal("empty lists")
 	}
+}
+
+func TestPerSourceLimit(t *testing.T) {
+	h := newHarness(t, 100, 100)
+	h.cfg.Stutter = 0
+	h.cfg.MaxConsPerSource = 1
+	h.deps.Now = nil
+	h.deps.Sleep = nil
+	srv := NewServer(h.cfg, h.deps, h.counters)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = srv.ServeListener(ctx, l) }()
+
+	c1, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c1.Close()
+	expect(t, newLineReader(c1), "220 ")
+	if h.counters.SourceCount(netip.MustParseAddr("127.0.0.1")) != 1 {
+		t.Fatal("source count")
+	}
+	c2, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c2.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := c2.Read(make([]byte, 1)); err == nil {
+		t.Fatal("second connection from the same source must be dropped")
+	}
+	_ = c2.Close()
+	cancel()
+	srv.Shutdown()
+}
+
+func TestLineLengthLimit(t *testing.T) {
+	h := newHarness(t, 100, 100)
+	h.cfg.Stutter = 0
+	h.cfg.MaxLineLength = 64
+	client, server := net.Pipe()
+	defer client.Close()
+	c := NewConn(server, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	go c.Serve()
+	br := newLineReader(client)
+	expect(t, br, "220 ")
+	// A 100 byte HELO without a newline is cut at the limit and processed;
+	// the remainder is read as the next (unrecognised) command. net.Pipe
+	// writes block until read, so send from a goroutine.
+	go func() { _, _ = io.WriteString(client, "HELO "+strings.Repeat("a", 95)+"\r\n") }()
+	expect(t, br, "250 greyd.org")
+	if len(c.Helo) != 64-len("HELO ") {
+		t.Fatalf("helo length %d", len(c.Helo))
+	}
+	expect(t, br, "500 Command unrecognized")
+	send(t, client, "QUIT\r\n")
+	expect(t, br, "221 ")
 }
 
 func TestServerAcceptsAndLimits(t *testing.T) {

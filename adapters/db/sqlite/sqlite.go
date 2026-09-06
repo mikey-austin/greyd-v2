@@ -22,12 +22,19 @@
 // Configuration (section "database"): "path" is the directory holding the
 // database file (default /var/db/greyd, created mode 0700 when missing)
 // and "db_name" the file name (default greyd.sqlite).
+//
+// Every transaction runs on one pinned connection: Update issues BEGIN
+// IMMEDIATE and retries while another process holds the database lock;
+// View issues a plain BEGIN. Nested transactions (View or Update called
+// from within a transaction function) are not supported.
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -64,8 +71,9 @@ func init() {
 
 // dialect is the SQLite flavour of the shared statements.
 var dialect = sqlcommon.Dialect{
-	Quote: '`',
-	Begin: "BEGIN IMMEDIATE",
+	Quote:      '`',
+	PinnedConn: true,
+	Begin:      "BEGIN IMMEDIATE",
 	UpsertEntry: "INSERT OR REPLACE INTO entries " +
 		"(`ip`, `helo`, `from`, `to`, `first`, `pass`, `expire`, `bcount`, `pcount`) " +
 		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -103,6 +111,7 @@ var schema = []string{
 type Store struct {
 	*sqlcommon.Store
 	path string
+	log  *slog.Logger
 }
 
 // New creates the store and its directory (Mod_db_init). The database is
@@ -128,9 +137,11 @@ func New(cfg *config.Config, opts core.StoreOptions) (*Store, error) {
 		}
 	}
 
+	log := logger.Or(opts.Log)
 	s := &Store{
-		Store: sqlcommon.NewStore(dialect, opts.Hostname),
+		Store: sqlcommon.NewStore(dialect, opts.Hostname, log),
 		path:  filepath.Join(dir, name),
+		log:   log,
 	}
 	s.TxnRetry = s.retryBusy
 	return s, nil
@@ -140,8 +151,8 @@ func New(cfg *config.Config, opts core.StoreOptions) (*Store, error) {
 func (s *Store) Path() string { return s.path }
 
 // Open opens the database file and ensures the schema exists. It is a
-// no-op on an open store.
-func (s *Store) Open(core.OpenMode) error {
+// no-op on an open store. A store opened read-only refuses Update.
+func (s *Store) Open(ctx context.Context, mode core.OpenMode) error {
 	if s.Opened() {
 		return nil
 	}
@@ -152,7 +163,7 @@ func (s *Store) Open(core.OpenMode) error {
 	// Transactions are plain BEGIN/COMMIT statements, so everything has
 	// to run on the one pinned connection.
 	db.SetMaxOpenConns(1)
-	if err := s.Attach(db, schema); err != nil {
+	if err := s.Attach(ctx, db, mode, schema); err != nil {
 		return fmt.Errorf("could not open %s: %w", s.path, err)
 	}
 	return nil
@@ -166,8 +177,8 @@ func (s *Store) retryBusy(run func() error) error {
 		if err == nil || !isBusy(err) || retries >= maxRetry {
 			return err
 		}
-		logger.Warning("db busy, retrying in %d seconds (try %d of %d)",
-			int(retryDelay/time.Second), retries+1, maxRetry)
+		s.log.Warn("db busy, retrying", "path", s.path, "delay", retryDelay,
+			"try", retries+1, "max", maxRetry)
 		sleep(retryDelay)
 	}
 }

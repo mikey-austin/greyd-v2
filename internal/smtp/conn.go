@@ -26,6 +26,7 @@ package smtp
 import (
 	"bytes"
 	"io"
+	"log/slog"
 	"net"
 	"net/netip"
 	"sync"
@@ -33,8 +34,8 @@ import (
 	"time"
 
 	"github.com/mikey-austin/greyd-golang/internal/blacklist"
-	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/logger"
+	"github.com/mikey-austin/greyd-golang/internal/settings"
 )
 
 // Constants from con.h and constants.h.
@@ -85,21 +86,36 @@ type Config struct {
 	ProxyProtocol bool
 	// PermittedProxies is consulted when ProxyProtocol is enabled.
 	PermittedProxies *blacklist.Blacklist
+	// MaxLineLength caps a command line; longer input is treated as a
+	// complete line (the C buffer was 8191 bytes).
+	MaxLineLength int
+	// MaxConsPerSource caps concurrent connections from one address (0 =
+	// unlimited).
+	MaxConsPerSource int
 }
 
-// ConfigFrom extracts the connection settings from the configuration.
-func ConfigFrom(cfg *config.Config) Config {
+// ConfigFrom extracts the connection settings.
+func ConfigFrom(s *settings.Settings) Config {
 	return Config{
-		Hostname:      cfg.Str("hostname", "", ""),
-		Banner:        cfg.Str("banner", "", DefaultBanner),
-		ErrorCode:     cfg.Str("error_code", "", DefaultErrCode),
-		Greylist:      cfg.Bool("enable", "grey", true),
-		GreyStutter:   cfg.Int("stutter", "grey", DefaultGreyStut),
-		Stutter:       cfg.Int("stutter", "", DefaultStutter),
-		Verbose:       cfg.Bool("verbose", "", false),
-		Window:        cfg.Int("window", "", 0),
-		ProxyProtocol: cfg.Bool("proxy_protocol_enable", "", false),
+		Hostname:         s.Hostname,
+		Banner:           s.Banner,
+		ErrorCode:        s.ErrorCode,
+		Greylist:         s.Grey.Enable,
+		GreyStutter:      s.Grey.Stutter,
+		Stutter:          s.Stutter,
+		Verbose:          s.Verbose,
+		Window:           s.Window,
+		ProxyProtocol:    s.ProxyProtocolEnable,
+		MaxLineLength:    s.MaxLineLength,
+		MaxConsPerSource: s.MaxConsPerSource,
 	}
+}
+
+func (c Config) lineLimit() int {
+	if c.MaxLineLength <= 0 {
+		return BufSize - 1
+	}
+	return c.MaxLineLength
 }
 
 // Deps are the collaborators of a connection.
@@ -114,6 +130,8 @@ type Deps struct {
 	// Now and Sleep are overridable for tests.
 	Now   func() time.Time
 	Sleep func(time.Duration)
+	// Log receives connection events; nil discards them.
+	Log *slog.Logger
 }
 
 func (d *Deps) now() time.Time {
@@ -138,30 +156,48 @@ type Counters struct {
 	BlackClients int
 	MaxCons      int
 	MaxBlack     int
+	perSource    map[netip.Addr]int
 }
 
 // NewCounters creates counters with the given limits.
 func NewCounters(maxCons, maxBlack int) *Counters {
-	return &Counters{MaxCons: maxCons, MaxBlack: maxBlack}
+	return &Counters{MaxCons: maxCons, MaxBlack: maxBlack, perSource: make(map[netip.Addr]int)}
 }
 
-func (c *Counters) add(black bool) (clients, blackClients int) {
+func (c *Counters) add(src netip.Addr, black bool) (clients, blackClients int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Clients++
 	if black {
 		c.BlackClients++
 	}
+	if src.IsValid() {
+		c.perSource[src]++
+	}
 	return c.Clients, c.BlackClients
 }
 
-func (c *Counters) remove(black bool) {
+func (c *Counters) remove(src netip.Addr, black bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Clients--
 	if black {
 		c.BlackClients--
 	}
+	if src.IsValid() {
+		if c.perSource[src] <= 1 {
+			delete(c.perSource, src)
+		} else {
+			c.perSource[src]--
+		}
+	}
+}
+
+// SourceCount returns the number of live connections from an address.
+func (c *Counters) SourceCount(src netip.Addr) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.perSource[src]
 }
 
 // Snapshot returns the current totals.
@@ -226,6 +262,8 @@ type Conn struct {
 	r, w   bool
 	closed bool
 	black  bool
+
+	log *slog.Logger
 }
 
 // NewConn initialises a connection for the client at src accepted on the
@@ -237,11 +275,11 @@ func NewConn(rw io.ReadWriter, src, local netip.AddrPort, cfg Config, deps Deps,
 		c.nc = nc
 	}
 	c.SrcAddr = src.Addr().Unmap().String()
+	c.log = logger.Or(deps.Log).With("client", c.SrcAddr)
 	c.start = deps.now()
 	c.matchBlacklists()
 
-	clients, black := counters.add(c.black)
-	_ = clients
+	_, black := counters.add(src.Addr().Unmap(), c.black)
 	if c.black {
 		c.ListSummary = SummarizeLists(c.Lists)
 		// Abandon stuttering if there are too many blacklisted connections.
@@ -303,11 +341,11 @@ func (c *Conn) Close() {
 	}
 	elapsed := int64(c.deps.now().Sub(c.start).Seconds())
 	if c.black {
-		logger.Info("%s: disconnected after %d seconds. lists: %s", c.SrcAddr, elapsed, c.ListSummary)
+		c.log.Info("disconnected", "seconds", elapsed, "lists", c.ListSummary)
 	} else {
-		logger.Info("%s: disconnected after %d seconds.", c.SrcAddr, elapsed)
+		c.log.Info("disconnected", "seconds", elapsed)
 	}
-	c.counters.remove(c.black)
+	c.counters.remove(c.Src.Addr().Unmap(), c.black)
 	c.Lists = nil
 	c.ListSummary = ""
 	c.Out = nil
@@ -357,9 +395,10 @@ func (c *Conn) HandleRead() {
 	if c.closed || !c.r {
 		return
 	}
-	buf := make([]byte, BufSize-1)
+	limit := c.cfg.lineLimit()
+	buf := make([]byte, limit)
 	for {
-		remaining := BufSize - 1 - len(c.in)
+		remaining := limit - len(c.in)
 		if remaining <= 0 {
 			break
 		}
@@ -372,7 +411,7 @@ func (c *Conn) HandleRead() {
 		}
 		if err != nil {
 			if err != io.EOF {
-				logger.Warning("connection read error")
+				c.log.Warn("connection read error", "err", err)
 			}
 			c.Close()
 			return
@@ -417,7 +456,7 @@ func (c *Conn) HandleWrite() {
 		if c.Out[c.outPos] == '\n' && !c.seenCR {
 			// We must write a \r before a \n.
 			if _, err := c.rw.Write([]byte{'\r'}); err != nil {
-				logger.Warning("connection write error")
+				c.log.Warn("connection write error", "err", err)
 				c.Close()
 				return
 			}
@@ -430,7 +469,7 @@ func (c *Conn) HandleWrite() {
 		}
 		n, err := c.rw.Write(c.Out[c.outPos : c.outPos+toWrite])
 		if err != nil || n == 0 {
-			logger.Warning("connection write error")
+			c.log.Warn("connection write error", "err", err)
 			c.Close()
 			return
 		}
@@ -476,6 +515,6 @@ func (c *Conn) setWindow() {
 		serr = setRcvBuf(fd, c.cfg.Window)
 	})
 	if serr != nil {
-		logger.Debug("setsockopt failed, window size of %d", c.cfg.Window)
+		c.log.Debug("setsockopt failed", "window", c.cfg.Window, "err", serr)
 	}
 }

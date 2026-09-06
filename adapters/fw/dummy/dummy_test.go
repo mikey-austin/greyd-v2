@@ -13,11 +13,12 @@ import (
 func TestDummy(t *testing.T) {
 	cfg := config.New()
 	cfg.SetStr("driver", "firewall", "greyd_fw_dummy.so")
-	fw, err := core.OpenFirewall(cfg)
+	ctx := context.Background()
+	fw, err := core.OpenFirewall(ctx, cfg, core.FirewallOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := fw.Replace("greyd-whitelist", []string{"1.1.1.1", "2.2.2.2/31"}, core.IPv4)
+	n, err := fw.Replace(ctx, "greyd-whitelist", []string{"1.1.1.1", "2.2.2.2/31"}, core.IPv4)
 	if err != nil || n != 2 {
 		t.Fatalf("Replace = %d %v", n, err)
 	}
@@ -25,16 +26,16 @@ func TestDummy(t *testing.T) {
 		t.Fatalf("Set = %v", got)
 	}
 	proxy := netip.MustParseAddrPort("10.0.0.1:8025")
-	dst, err := fw.LookupOrigDst(netip.MustParseAddrPort("1.2.3.4:5"), proxy)
+	dst, err := fw.LookupOrigDst(ctx, netip.MustParseAddrPort("1.2.3.4:5"), proxy)
 	if err != nil || dst != proxy {
 		t.Fatalf("LookupOrigDst = %v %v", dst, err)
 	}
-	if err := fw.StartLogCapture(); err != nil {
+	if err := fw.StartLogCapture(ctx); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	tctx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 	defer cancel()
-	entries, err := fw.CaptureLog(ctx)
+	entries, err := fw.CaptureLog(tctx)
 	if err != nil || entries != nil {
 		t.Fatalf("CaptureLog = %v %v", entries, err)
 	}

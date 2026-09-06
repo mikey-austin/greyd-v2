@@ -19,8 +19,10 @@ package setup
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -34,6 +36,7 @@ import (
 	"github.com/mikey-austin/greyd-golang/internal/config/parse"
 	"github.com/mikey-austin/greyd-golang/internal/ipc"
 	"github.com/mikey-austin/greyd-golang/internal/logger"
+	"github.com/mikey-austin/greyd-golang/internal/settings"
 )
 
 // frame is one blacklist message received by the fake greyd.
@@ -74,12 +77,12 @@ func newFakeGreyd(t *testing.T) *fakeGreyd {
 				if err != nil {
 					return
 				}
+				bl, ok := msg.(*ipc.BlacklistMessage)
+				if !ok {
+					return
+				}
 				g.mu.Lock()
-				g.frames = append(g.frames, frame{
-					name:    msg.Str("name", "", ""),
-					message: msg.Str("message", "", ""),
-					ips:     msg.StrList("ips", ""),
-				})
+				g.frames = append(g.frames, frame{name: bl.Name, message: bl.Message, ips: bl.IPs})
 				g.mu.Unlock()
 			}()
 		}
@@ -167,17 +170,29 @@ blacklist bl2 {
 	return cfg, dir
 }
 
-func quietLogger(t *testing.T) *bytes.Buffer {
+// load turns a parsed configuration into settings.
+func load(t *testing.T, cfg *config.Config) *settings.Settings {
 	t.Helper()
-	var buf bytes.Buffer
-	if err := logger.Setup(logger.Options{Ident: "test", Stderr: &buf}); err != nil {
+	s, err := settings.Load(cfg)
+	if err != nil {
 		t.Fatal(err)
 	}
-	return &buf
+	return s
+}
+
+// quietLogger returns a buffer-backed logger for asserting on warnings.
+func quietLogger(t *testing.T) (*bytes.Buffer, *slog.Logger) {
+	t.Helper()
+	var buf bytes.Buffer
+	l, _, err := logger.New(logger.Options{Ident: "test", Stderr: &buf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &buf, l
 }
 
 func TestRunSendsCollapsedLists(t *testing.T) {
-	quietLogger(t)
+	_, _ = quietLogger(t)
 	cfg, _ := testConfig(t, "")
 	g := newFakeGreyd(t)
 	fw := dummy.New()
@@ -188,7 +203,7 @@ func TestRunSendsCollapsedLists(t *testing.T) {
 		GreyOnly: false,
 		Debugf:   func(format string, a ...any) { fmt.Fprintf(&debug, format, a...) },
 	}
-	if err := Run(cfg, o, fw, g.dial); err != nil {
+	if err := Run(context.Background(), load(t, cfg), o, fw, g.dial); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -221,11 +236,11 @@ func TestRunSendsCollapsedLists(t *testing.T) {
 }
 
 func TestRunGreyOnlySkipsFirewall(t *testing.T) {
-	quietLogger(t)
+	_, _ = quietLogger(t)
 	cfg, _ := testConfig(t, "")
 	g := newFakeGreyd(t)
 
-	if err := Run(cfg, Options{GreyOnly: true}, nil, g.dial); err != nil {
+	if err := Run(context.Background(), load(t, cfg), Options{GreyOnly: true}, nil, g.dial); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := len(g.received(t)); got != 2 {
@@ -234,25 +249,25 @@ func TestRunGreyOnlySkipsFirewall(t *testing.T) {
 }
 
 func TestRunBlacklistModeNeedsFirewall(t *testing.T) {
-	quietLogger(t)
+	_, _ = quietLogger(t)
 	cfg, _ := testConfig(t, "")
 	g := newFakeGreyd(t)
 
-	err := Run(cfg, Options{GreyOnly: false}, nil, g.dial)
+	err := Run(context.Background(), load(t, cfg), Options{GreyOnly: false}, nil, g.dial)
 	if err == nil || !strings.Contains(err.Error(), "Could not configure firewall") {
 		t.Fatalf("err = %v, want firewall error", err)
 	}
 }
 
 func TestRunDryrunSendsNothing(t *testing.T) {
-	quietLogger(t)
+	_, _ = quietLogger(t)
 	cfg, _ := testConfig(t, "")
 	g := newFakeGreyd(t)
 	fw := dummy.New()
 
 	dialed := false
 	dial := func() (net.Conn, error) { dialed = true; return g.dial() }
-	if err := Run(cfg, Options{Dryrun: true}, fw, dial); err != nil {
+	if err := Run(context.Background(), load(t, cfg), Options{Dryrun: true}, fw, dial); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if dialed {
@@ -271,13 +286,13 @@ func TestRunNoLists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Run(cfg, Options{}, nil, nil); err == nil || !strings.Contains(err.Error(), "no lists configured") {
+	if err := Run(context.Background(), load(t, cfg), Options{}, nil, nil); err == nil || !strings.Contains(err.Error(), "no lists configured") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestRunSkipsMissingFileAndUnknownMethod(t *testing.T) {
-	logs := quietLogger(t)
+	logs, lg := quietLogger(t)
 	cfg, _ := testConfig(t, fmt.Sprintf(`
 section setup {
     lists = ["missing", "bl1", "odd", "nofile", "unconfigured", "bl2"]
@@ -296,7 +311,7 @@ blacklist nofile {
 `, filepath.Join(t.TempDir(), "does-not-exist")))
 	g := newFakeGreyd(t)
 
-	if err := Run(cfg, Options{GreyOnly: true}, nil, g.dial); err != nil {
+	if err := Run(context.Background(), load(t, cfg), Options{GreyOnly: true, Log: lg}, nil, g.dial); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	frames := g.received(t)
@@ -311,11 +326,11 @@ blacklist nofile {
 		t.Fatalf("frames = %v, want %v", names, want)
 	}
 	for _, msg := range []string{
-		"Ignoring list missing",
+		"ignoring list list=missing",
 		"Unknown method carrier-pigeon",
-		"Ignoring list odd",
+		"ignoring list list=odd",
 		"No file configuration variables set",
-		"Ignoring list nofile",
+		"ignoring list list=nofile",
 	} {
 		if !strings.Contains(logs.String(), msg) {
 			t.Errorf("log missing %q in:\n%s", msg, logs.String())
@@ -324,7 +339,7 @@ blacklist nofile {
 }
 
 func TestRunParseErrorKeepsEarlierEntries(t *testing.T) {
-	logs := quietLogger(t)
+	logs, lg := quietLogger(t)
 	dir := t.TempDir()
 	// A truncated address is a syntax error on line 3; the two entries
 	// before it survive and parsing stops there, as in the C parser.
@@ -338,7 +353,7 @@ blacklist bad { file = "%s" }
 	}
 	g := newFakeGreyd(t)
 
-	if err := Run(cfg, Options{GreyOnly: true}, nil, g.dial); err != nil {
+	if err := Run(context.Background(), load(t, cfg), Options{GreyOnly: true, Log: lg}, nil, g.dial); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	frames := g.received(t)
@@ -351,16 +366,16 @@ blacklist bad { file = "%s" }
 	if frames[0].message != DefaultMessage {
 		t.Fatalf("message = %q, want default", frames[0].message)
 	}
-	if !strings.Contains(logs.String(), "blacklist parse error processing bad, line 3 col") {
+	if !strings.Contains(logs.String(), "blacklist parse error list=bad line=3 col=") {
 		t.Fatalf("log missing parse error:\n%s", logs.String())
 	}
 }
 
 func TestRunDialFailure(t *testing.T) {
-	quietLogger(t)
+	_, _ = quietLogger(t)
 	cfg, _ := testConfig(t, "")
 	dial := func() (net.Conn, error) { return nil, fmt.Errorf("refused") }
-	err := Run(cfg, Options{GreyOnly: true}, nil, dial)
+	err := Run(context.Background(), load(t, cfg), Options{GreyOnly: true}, nil, dial)
 	if err == nil || !strings.Contains(err.Error(), "could not connect to greyd-config") {
 		t.Fatalf("err = %v", err)
 	}
@@ -406,7 +421,7 @@ blacklist remote {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rc, err := Open(cfg.Blacklist("remote"), cfg)
+			rc, err := Open(cfg.Blacklist("remote"), load(t, cfg).Setup)
 			if err != nil {
 				t.Fatalf("Open: %v", err)
 			}
@@ -434,7 +449,7 @@ blacklist remote { method = "ftp", file = "ftp.example.org/list" }
 	if err != nil {
 		t.Fatal(err)
 	}
-	rc, err := Open(cfg.Blacklist("remote"), cfg)
+	rc, err := Open(cfg.Blacklist("remote"), load(t, cfg).Setup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +472,7 @@ blacklist plain { method = "file", file = "%s" }
 		t.Fatal(err)
 	}
 	for name, want := range map[string]string{"gz": "1.2.3.4\n", "plain": "5.6.7.8\n"} {
-		rc, err := Open(cfg.Blacklist(name), cfg)
+		rc, err := Open(cfg.Blacklist(name), load(t, cfg).Setup)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -478,7 +493,7 @@ func TestOpenExecSplitsOnSpacesAndTabs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rc, err := Open(cfg.Blacklist("ex"), cfg)
+	rc, err := Open(cfg.Blacklist("ex"), load(t, cfg).Setup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +504,7 @@ func TestOpenExecSplitsOnSpacesAndTabs(t *testing.T) {
 	if string(data) != "5.6.7.8\n" {
 		t.Fatalf("read %q", data)
 	}
-	if _, err := Open(cfg.Blacklist("missing"), cfg); err == nil {
+	if _, err := Open(cfg.Blacklist("missing"), load(t, cfg).Setup); err == nil {
 		t.Fatal("expected error for missing command")
 	}
 }

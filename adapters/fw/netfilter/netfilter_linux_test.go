@@ -22,6 +22,7 @@ package netfilter
 
 import (
 	"context"
+	"net/netip"
 	"os"
 	"slices"
 	"testing"
@@ -83,8 +84,8 @@ func TestStartLogCaptureGroupClash(t *testing.T) {
 	cfg.SetInt("drop_privs", "", 0)
 	cfg.SetInt("inbound_group", "firewall", 42)
 	cfg.SetInt("outbound_group", "firewall", 42)
-	fw := New(cfg)
-	err := fw.StartLogCapture()
+	fw := New(cfg, core.FirewallOptions{})
+	err := fw.StartLogCapture(context.Background())
 	if err == nil {
 		_ = fw.EndLogCapture()
 		t.Fatal("expected an error for identical NFLOG groups")
@@ -97,7 +98,7 @@ func TestStartLogCaptureGroupClash(t *testing.T) {
 func TestCaptureLogNotStarted(t *testing.T) {
 	cfg := config.New()
 	cfg.SetInt("drop_privs", "", 0)
-	fw := New(cfg)
+	fw := New(cfg, core.FirewallOptions{})
 	if _, err := fw.CaptureLog(context.Background()); err == nil {
 		t.Fatal("expected an error before StartLogCapture")
 	}
@@ -109,7 +110,7 @@ func TestCaptureLogNotStarted(t *testing.T) {
 func TestCaptureLogDrainsQueue(t *testing.T) {
 	cfg := config.New()
 	cfg.SetInt("drop_privs", "", 0)
-	fw := New(cfg)
+	fw := New(cfg, core.FirewallOptions{})
 	fw.entries = make(chan string, 8)
 	fw.entries <- "192.0.2.1"
 	fw.entries <- "2001:db8::1"
@@ -127,6 +128,40 @@ func TestCaptureLogDrainsQueue(t *testing.T) {
 	defer cancel()
 	if _, err := fw.CaptureLog(ctx); err != context.DeadlineExceeded {
 		t.Fatalf("expected context deadline error, got %v", err)
+	}
+}
+
+func TestReplaceCancelledContext(t *testing.T) {
+	cfg := config.New()
+	cfg.SetInt("drop_privs", "", 0)
+	fw := New(cfg, core.FirewallOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// A done context is refused before any netlink request is issued, so
+	// this needs no privileges.
+	if n, err := fw.Replace(ctx, "greyd-test", []string{"192.0.2.0/24"}, core.IPv4); err != context.Canceled || n != -1 {
+		t.Fatalf("Replace with cancelled ctx = %d, %v; want -1, context.Canceled", n, err)
+	}
+	if err := fw.StartLogCapture(ctx); err != context.Canceled {
+		t.Fatalf("StartLogCapture with cancelled ctx = %v; want context.Canceled", err)
+	}
+	src := netip.MustParseAddrPort("192.0.2.1:40000")
+	proxy := netip.MustParseAddrPort("198.51.100.1:8025")
+	got, err := fw.LookupOrigDst(ctx, src, proxy)
+	if err != context.Canceled || got != proxy {
+		t.Fatalf("LookupOrigDst with cancelled ctx = %v, %v; want proxy, context.Canceled", got, err)
+	}
+}
+
+func TestLookupOrigDstFamilyMismatch(t *testing.T) {
+	cfg := config.New()
+	cfg.SetInt("drop_privs", "", 0)
+	fw := New(cfg, core.FirewallOptions{})
+	src := netip.MustParseAddrPort("[2001:db8::1]:40000")
+	proxy := netip.MustParseAddrPort("198.51.100.1:8025")
+	got, err := fw.LookupOrigDst(context.Background(), src, proxy)
+	if err != nil || got != proxy {
+		t.Fatalf("LookupOrigDst = %v, %v; want proxy, nil", got, err)
 	}
 }
 
@@ -166,8 +201,9 @@ func TestReplaceIntegration(t *testing.T) {
 	const set = "greyd-test"
 	cfg := config.New()
 	cfg.SetInt("drop_privs", "", 0)
-	fw := New(cfg)
-	if err := fw.Open(); err != nil {
+	fw := New(cfg, core.FirewallOptions{})
+	ctx := context.Background()
+	if err := fw.Open(ctx); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
@@ -175,7 +211,7 @@ func TestReplaceIntegration(t *testing.T) {
 		_ = fw.Close()
 	}()
 
-	n, err := fw.Replace(set, []string{"192.0.2.0/24", "198.51.100.7"}, core.IPv4)
+	n, err := fw.Replace(ctx, set, []string{"192.0.2.0/24", "198.51.100.7"}, core.IPv4)
 	if err != nil {
 		t.Fatalf("Replace: %v", err)
 	}
@@ -194,7 +230,7 @@ func TestReplaceIntegration(t *testing.T) {
 	}
 
 	// A second replace swaps in the new contents.
-	if n, err = fw.Replace(set, []string{"203.0.113.0/24"}, core.IPv4); err != nil || n != 1 {
+	if n, err = fw.Replace(ctx, set, []string{"203.0.113.0/24"}, core.IPv4); err != nil || n != 1 {
 		t.Fatalf("second Replace: %d, %v", n, err)
 	}
 	res, err = netlink.IpsetList(set)
@@ -205,7 +241,7 @@ func TestReplaceIntegration(t *testing.T) {
 		t.Fatalf("unexpected contents after second replace: %+v", res.Entries)
 	}
 
-	if _, err := fw.Replace(set, []string{"not-a-cidr"}, core.IPv4); err == nil {
+	if _, err := fw.Replace(ctx, set, []string{"not-a-cidr"}, core.IPv4); err == nil {
 		t.Fatal("expected error for invalid cidr")
 	}
 	if err := netlink.IpsetDestroy(set); err != nil {

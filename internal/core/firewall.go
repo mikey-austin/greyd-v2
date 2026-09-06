@@ -18,6 +18,7 @@ package core
 
 import (
 	"context"
+	"log/slog"
 	"net/netip"
 
 	"github.com/mikey-austin/greyd-golang/internal/config"
@@ -31,19 +32,21 @@ const (
 	IPv6 Family = 6
 )
 
-// Firewall is the firewall port (firewall.h FW_handle_T).
+// Firewall is the firewall port (firewall.h FW_handle_T). Every operation
+// takes a context so shutdown can interrupt slow kernel or subprocess
+// interactions.
 type Firewall interface {
 	// Open initialises the handle; called before privileges are dropped.
-	Open() error
+	Open(ctx context.Context) error
 	Close() error
 
 	// Replace atomically replaces the contents of the named set or table
 	// with the supplied CIDR blocks and returns the number added.
-	Replace(set string, cidrs []string, af Family) (int, error)
+	Replace(ctx context.Context, set string, cidrs []string, af Family) (int, error)
 
 	// StartLogCapture prepares the connection tracking machinery used by
 	// greylogd.
-	StartLogCapture() error
+	StartLogCapture(ctx context.Context) error
 	EndLogCapture() error
 	// CaptureLog blocks until log entries arrive, the driver's internal
 	// timeout elapses (returning an empty slice) or ctx is done. Each entry
@@ -52,9 +55,16 @@ type Firewall interface {
 
 	// LookupOrigDst returns the destination of a connection before it was
 	// redirected (DNAT) to greyd. Drivers that cannot know return proxy.
-	LookupOrigDst(src, proxy netip.AddrPort) (netip.AddrPort, error)
+	LookupOrigDst(ctx context.Context, src, proxy netip.AddrPort) (netip.AddrPort, error)
+}
+
+// FirewallOptions carries process level information to firewall
+// factories.
+type FirewallOptions struct {
+	// Log receives driver diagnostics; nil discards them.
+	Log *slog.Logger
 }
 
 // FirewallFactory constructs a firewall driver from the "firewall"
 // configuration section.
-type FirewallFactory func(cfg *config.Config) (Firewall, error)
+type FirewallFactory func(cfg *config.Config, opts FirewallOptions) (Firewall, error)

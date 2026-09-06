@@ -17,12 +17,14 @@
 // Package sqlcommon holds the parts shared by the SQL database drivers
 // (sqlite, mysql, postgresql): the statement text that is identical across
 // the C drivers, the row to key/data mapping (populate_key/populate_val),
-// the iterator and the scan algorithm. The drivers only supply a Dialect
-// and the connection.
+// the transaction plumbing, the iterator and the scan algorithm. The
+// drivers only supply a Dialect and the connection.
 //
-// All statements run on one pinned connection so that BEGIN/COMMIT issued
-// as plain statements scope the work that follows, exactly as the C drivers
-// did with their single handle.
+// Transactions are driven in one of two ways, selected by the dialect:
+// on a single pinned connection with BEGIN/COMMIT/ROLLBACK issued as plain
+// statements (sqlite, so the driver can retry a busy database exactly as
+// the C driver did), or through database/sql's BeginTx on the connection
+// pool (mysql, postgresql).
 package sqlcommon
 
 import (
@@ -30,14 +32,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
 	"github.com/mikey-austin/greyd-golang/internal/core"
+	"github.com/mikey-austin/greyd-golang/internal/logger"
 )
-
-// ErrNotOpen is returned when a store is used before Open.
-var ErrNotOpen = errors.New("database not open")
 
 // ErrNoCurrent is returned by iterator mutations before the first Next or
 // after the end.
@@ -58,8 +59,15 @@ type Dialect struct {
 	// this host.
 	HostScoped bool
 
-	// Begin starts a transaction ("BEGIN IMMEDIATE", "START TRANSACTION",
-	// "BEGIN"). Commit and rollback are COMMIT and ROLLBACK everywhere.
+	// PinnedConn makes the store hold a single connection for its whole
+	// life and drive transactions with Begin, "COMMIT" and "ROLLBACK"
+	// issued as plain statements, which lets the driver retry them
+	// (sqlite's busy handling). Otherwise transactions come from
+	// database/sql's BeginTx on the connection pool, read-only ones for
+	// View.
+	PinnedConn bool
+	// Begin starts a write transaction in PinnedConn mode ("BEGIN
+	// IMMEDIATE"); read transactions use a plain BEGIN.
 	Begin string
 
 	// UpsertEntry inserts or replaces an entries row. Parameters: ip,
@@ -103,13 +111,6 @@ func (d Dialect) SQL(tmpl string) string {
 	return sb.String()
 }
 
-// Conn is the subset of *sql.Conn the store executes through.
-type Conn interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 // Statement templates shared by the three C drivers.
 const (
 	tmplGetEntry = "SELECT `first`, `pass`, `expire`, `bcount`, `pcount` FROM entries " +
@@ -147,25 +148,39 @@ type statements struct {
 	scanDelete, scanWhitelist, scanSelect            string
 }
 
-// Store implements the transactional and data operations of core.Store on
-// top of a Conn. Drivers embed it and add Open/Close.
+// execer is what a transaction (or, outside one, a connection or pool)
+// executes statements through; *sql.DB, *sql.Conn and *sql.Tx satisfy it.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// Store implements the transactional part of core.Store on top of a
+// *sql.DB. Drivers embed it and add Open, which connects and calls Attach.
+// A Store is not safe for concurrent use and does not support nested
+// transactions: calling View or Update from within a transaction function
+// is an error in PinnedConn mode and undefined otherwise.
 type Store struct {
 	dialect Dialect
 	host    string
 	stmts   statements
-	// TxnRetry, when set, wraps the BEGIN and COMMIT statements so a
-	// driver can retry them (sqlite's busy handling).
+	log     *slog.Logger
+	// TxnRetry, when set, wraps the BEGIN and COMMIT statements of
+	// PinnedConn mode so a driver can retry them (sqlite's busy
+	// handling).
 	TxnRetry func(run func() error) error
 
-	db    *sql.DB
-	conn  *sql.Conn
-	inTxn bool
+	db *sql.DB
+	// conn is the pinned connection in PinnedConn mode, nil otherwise.
+	conn     *sql.Conn
+	readOnly bool
 }
 
 // NewStore prepares the statements of a dialect. hostname is stored in
-// greyd_host when the dialect is HostScoped.
-func NewStore(d Dialect, hostname string) *Store {
-	s := &Store{dialect: d, host: hostname}
+// greyd_host when the dialect is HostScoped; log receives diagnostics (nil
+// discards them).
+func NewStore(d Dialect, hostname string, log *slog.Logger) *Store {
+	s := &Store{dialect: d, host: hostname, log: logger.Or(log)}
 	s.stmts = statements{
 		begin:          d.Begin,
 		upsertEntry:    d.SQL(d.UpsertEntry),
@@ -195,82 +210,159 @@ func (s *Store) Dialect() Dialect { return s.dialect }
 // Hostname returns the greyd_host value.
 func (s *Store) Hostname() string { return s.host }
 
+// Log returns the store's logger.
+func (s *Store) Log() *slog.Logger { return s.log }
+
 // Opened reports whether Attach has been called.
-func (s *Store) Opened() bool { return s.conn != nil }
+func (s *Store) Opened() bool { return s.db != nil }
 
-// InTxn reports whether a transaction is open.
-func (s *Store) InTxn() bool { return s.inTxn }
-
-// Conn returns the pinned connection, or nil before Attach.
-func (s *Store) Conn() Conn {
-	if s.conn == nil {
-		return nil
-	}
-	return s.conn
-}
-
-// Attach takes ownership of db, pins a single connection for the life of
-// the store and runs the schema statements on it. On failure db is
-// closed.
-func (s *Store) Attach(db *sql.DB, schema []string) error {
-	if s.conn != nil {
+// Attach takes ownership of db, verifies it can be reached (pinning one
+// connection in PinnedConn mode) and runs the schema statements. mode is
+// remembered so that Update refuses to run on a read-only store. On
+// failure db is closed.
+func (s *Store) Attach(ctx context.Context, db *sql.DB, mode core.OpenMode, schema []string) error {
+	if s.db != nil {
 		db.Close()
 		return errors.New("store already attached")
 	}
-	conn, err := db.Conn(context.Background())
-	if err != nil {
+	var (
+		run  execer = db
+		conn *sql.Conn
+	)
+	if s.dialect.PinnedConn {
+		c, err := db.Conn(ctx)
+		if err != nil {
+			db.Close()
+			return fmt.Errorf("connect: %w", err)
+		}
+		conn, run = c, c
+	} else if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return fmt.Errorf("connect: %w", err)
 	}
 	for _, stmt := range schema {
-		if _, err := conn.ExecContext(context.Background(), stmt); err != nil {
-			conn.Close()
+		if _, err := run.ExecContext(ctx, stmt); err != nil {
+			if conn != nil {
+				conn.Close()
+			}
 			db.Close()
 			return fmt.Errorf("db schema init failed: %w", err)
 		}
 	}
-	s.db = db
-	s.conn = conn
+	s.db, s.conn, s.readOnly = db, conn, mode == core.OpenRO
 	return nil
 }
 
-// Close releases the connection. An open transaction is rolled back by the
-// server when the connection goes away, as in the C drivers.
+// Close releases the connection(s). Closing an unopened store is a no-op.
 func (s *Store) Close() error {
-	if s.conn == nil {
+	if s.db == nil {
 		return nil
 	}
 	var first error
-	if s.inTxn {
-		_, first = s.conn.ExecContext(context.Background(), "ROLLBACK")
-	}
-	if err := s.conn.Close(); err != nil && first == nil {
-		first = err
+	if s.conn != nil {
+		first = s.conn.Close()
 	}
 	if err := s.db.Close(); err != nil && first == nil {
 		first = err
 	}
-	s.conn, s.db, s.inTxn = nil, nil, false
+	s.db, s.conn, s.readOnly = nil, nil, false
 	return first
 }
 
-func (s *Store) exec(query string, args ...any) (sql.Result, error) {
-	if s.conn == nil {
-		return nil, ErrNotOpen
+// Exec runs a statement outside any transaction (schema maintenance,
+// tests). It must not be called from within a View or Update function.
+func (s *Store) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if s.db == nil {
+		return nil, core.ErrNotOpen
 	}
-	return s.conn.ExecContext(context.Background(), query, args...)
+	if s.conn != nil {
+		return s.conn.ExecContext(ctx, query, args...)
+	}
+	return s.db.ExecContext(ctx, query, args...)
 }
 
-func (s *Store) query(query string, args ...any) (*sql.Rows, error) {
-	if s.conn == nil {
-		return nil, ErrNotOpen
+// View runs fn in a read-only transaction, which is always rolled back
+// afterwards.
+func (s *Store) View(ctx context.Context, fn func(core.ReadTx) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return s.conn.QueryContext(context.Background(), query, args...)
+	if s.db == nil {
+		return core.ErrNotOpen
+	}
+	h, err := s.begin(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer s.rollback(h)
+	return fn(&tx{s: s, ctx: ctx, run: h, readOnly: true})
 }
 
-func (s *Store) runTxnStmt(stmt string) error {
+// Update runs fn in a read-write transaction, committing when fn returns
+// nil and rolling back otherwise.
+func (s *Store) Update(ctx context.Context, fn func(core.Tx) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.db == nil {
+		return core.ErrNotOpen
+	}
+	if s.readOnly {
+		return core.ErrReadOnly
+	}
+	h, err := s.begin(ctx, false)
+	if err != nil {
+		return err
+	}
+	if err := fn(&tx{s: s, ctx: ctx, run: h}); err != nil {
+		s.rollback(h)
+		return err
+	}
+	if err := h.commit(); err != nil {
+		s.rollback(h)
+		return fmt.Errorf("db txn commit failed: %w", err)
+	}
+	return nil
+}
+
+// txHandle is an open transaction of either engine.
+type txHandle interface {
+	execer
+	commit() error
+	// rollback discards the transaction; a transaction that is already
+	// finished is not an error.
+	rollback() error
+}
+
+func (s *Store) begin(ctx context.Context, readOnly bool) (txHandle, error) {
+	if s.conn == nil {
+		t, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: readOnly})
+		if err != nil {
+			return nil, fmt.Errorf("db txn start failed: %w", err)
+		}
+		return poolTx{t}, nil
+	}
+	stmt := "BEGIN"
+	if !readOnly {
+		stmt = s.stmts.begin
+	}
+	if err := s.runTxnStmt(ctx, stmt); err != nil {
+		return nil, fmt.Errorf("db txn start failed: %w", err)
+	}
+	return connTx{s: s, ctx: ctx, conn: s.conn}, nil
+}
+
+func (s *Store) rollback(h txHandle) {
+	if err := h.rollback(); err != nil {
+		s.log.Warn("db txn rollback failed", "err", err)
+	}
+}
+
+// runTxnStmt executes a transaction control statement on the pinned
+// connection, through TxnRetry when set.
+func (s *Store) runTxnStmt(ctx context.Context, stmt string) error {
 	run := func() error {
-		_, err := s.exec(stmt)
+		_, err := s.conn.ExecContext(ctx, stmt)
 		return err
 	}
 	if s.TxnRetry != nil {
@@ -279,83 +371,91 @@ func (s *Store) runTxnStmt(stmt string) error {
 	return run()
 }
 
-// Begin starts a transaction.
-func (s *Store) Begin() error {
-	if s.conn == nil {
-		return ErrNotOpen
+// poolTx is a database/sql transaction.
+type poolTx struct{ *sql.Tx }
+
+func (p poolTx) commit() error { return p.Commit() }
+
+func (p poolTx) rollback() error {
+	if err := p.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+		return err
 	}
-	if s.inTxn {
-		return core.ErrInTransaction
-	}
-	if err := s.runTxnStmt(s.stmts.begin); err != nil {
-		return fmt.Errorf("db txn start failed: %w", err)
-	}
-	s.inTxn = true
 	return nil
 }
 
-// Commit commits the transaction.
-func (s *Store) Commit() error {
-	if s.conn == nil {
-		return ErrNotOpen
-	}
-	if !s.inTxn {
-		return core.ErrNotInTransaction
-	}
-	if err := s.runTxnStmt("COMMIT"); err != nil {
-		return fmt.Errorf("db txn commit failed: %w", err)
-	}
-	s.inTxn = false
-	return nil
+// connTx is a transaction driven by plain statements on the pinned
+// connection.
+type connTx struct {
+	s    *Store
+	ctx  context.Context
+	conn *sql.Conn
 }
 
-// Rollback aborts the transaction.
-func (s *Store) Rollback() error {
-	if s.conn == nil {
-		return ErrNotOpen
+func (c connTx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return c.conn.ExecContext(ctx, query, args...)
+}
+
+func (c connTx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return c.conn.QueryContext(ctx, query, args...)
+}
+
+func (c connTx) commit() error { return c.s.runTxnStmt(c.ctx, "COMMIT") }
+
+// rollback ignores the caller's cancellation: the connection is reused, so
+// the transaction must end even when the context has expired.
+func (c connTx) rollback() error {
+	_, err := c.conn.ExecContext(context.WithoutCancel(c.ctx), "ROLLBACK")
+	return err
+}
+
+// tx implements core.Tx; a read-only one refuses writes.
+type tx struct {
+	s        *Store
+	ctx      context.Context
+	run      execer
+	readOnly bool
+}
+
+func (t *tx) exec(query string, args ...any) (sql.Result, error) {
+	if t.readOnly {
+		return nil, core.ErrReadOnly
 	}
-	if !s.inTxn {
-		return core.ErrNotInTransaction
-	}
-	if _, err := s.exec("ROLLBACK"); err != nil {
-		return fmt.Errorf("db txn rollback failed: %w", err)
-	}
-	s.inTxn = false
-	return nil
+	return t.run.ExecContext(t.ctx, query, args...)
+}
+
+func (t *tx) query(query string, args ...any) (*sql.Rows, error) {
+	return t.run.QueryContext(t.ctx, query, args...)
 }
 
 // Put stores an entry.
-func (s *Store) Put(k core.Key, d core.Data) error {
+func (t *tx) Put(k core.Key, d core.Data) error {
 	var err error
 	switch k.Type {
 	case core.KeyMail:
-		_, err = s.exec(s.stmts.insertSpamtrap, k.Str)
+		_, err = t.exec(t.s.stmts.insertSpamtrap, k.Str)
 	case core.KeyDomain:
-		_, err = s.exec(s.stmts.insertDomain, k.Str)
+		_, err = t.exec(t.s.stmts.insertDomain, k.Str)
 	case core.KeyIP:
-		_, err = s.exec(s.stmts.upsertEntry, s.entryArgs(k.Str, "", "", "", d)...)
+		_, err = t.exec(t.s.stmts.upsertEntry, t.entryArgs(k.Str, "", "", "", d)...)
 	case core.KeyTuple:
-		t := k.Tuple
-		_, err = s.exec(s.stmts.upsertEntry, s.entryArgs(t.IP, t.Helo, t.From, t.To, d)...)
+		tp := k.Tuple
+		_, err = t.exec(t.s.stmts.upsertEntry, t.entryArgs(tp.IP, tp.Helo, tp.From, tp.To, d)...)
 	default:
 		return fmt.Errorf("put: unsupported key type %d", k.Type)
 	}
 	return err
 }
 
-func (s *Store) entryArgs(ip, helo, from, to string, d core.Data) []any {
+func (t *tx) entryArgs(ip, helo, from, to string, d core.Data) []any {
 	args := []any{ip, helo, from, to, d.First, d.Pass, d.Expire, d.BCount, d.PCount}
-	if s.dialect.HostScoped {
-		args = append(args, s.host)
+	if t.s.dialect.HostScoped {
+		args = append(args, t.s.host)
 	}
 	return args
 }
 
 // Get looks an entry up.
-func (s *Store) Get(k core.Key) (core.Data, bool, error) {
-	if s.conn == nil {
-		return core.Data{}, false, ErrNotOpen
-	}
+func (t *tx) Get(k core.Key) (core.Data, bool, error) {
 	var (
 		rows *sql.Rows
 		err  error
@@ -365,19 +465,19 @@ func (s *Store) Get(k core.Key) (core.Data, bool, error) {
 	)
 	switch k.Type {
 	case core.KeyDomainPart:
-		rows, err = s.query(s.stmts.domainPart, k.Str)
+		rows, err = t.query(t.s.stmts.domainPart, k.Str)
 		fixed = &core.Data{PCount: core.PCountDomain}
 	case core.KeyDomain:
-		rows, err = s.query(s.stmts.getDomain, k.Str)
+		rows, err = t.query(t.s.stmts.getDomain, k.Str)
 		fixed = &core.Data{PCount: core.PCountDomain}
 	case core.KeyMail:
-		rows, err = s.query(s.stmts.getSpamtrap, k.Str)
+		rows, err = t.query(t.s.stmts.getSpamtrap, k.Str)
 		fixed = &core.Data{PCount: core.PCountSpamtrap}
 	case core.KeyIP:
-		rows, err = s.query(s.stmts.getEntry, k.Str, "", "", "")
+		rows, err = t.query(t.s.stmts.getEntry, k.Str, "", "", "")
 	case core.KeyTuple:
-		t := k.Tuple
-		rows, err = s.query(s.stmts.getEntry, t.IP, t.Helo, t.From, t.To)
+		tp := k.Tuple
+		rows, err = t.query(t.s.stmts.getEntry, tp.IP, tp.Helo, tp.From, tp.To)
 	default:
 		return core.Data{}, false, fmt.Errorf("get: unsupported key type %d", k.Type)
 	}
@@ -399,21 +499,21 @@ func (s *Store) Get(k core.Key) (core.Data, bool, error) {
 }
 
 // Del removes an entry and reports whether a row was deleted.
-func (s *Store) Del(k core.Key) (bool, error) {
+func (t *tx) Del(k core.Key) (bool, error) {
 	var (
 		res sql.Result
 		err error
 	)
 	switch k.Type {
 	case core.KeyMail:
-		res, err = s.exec(s.stmts.delSpamtrap, k.Str)
+		res, err = t.exec(t.s.stmts.delSpamtrap, k.Str)
 	case core.KeyDomain:
-		res, err = s.exec(s.stmts.delDomain, k.Str)
+		res, err = t.exec(t.s.stmts.delDomain, k.Str)
 	case core.KeyIP:
-		res, err = s.exec(s.stmts.delEntry, k.Str, "", "", "")
+		res, err = t.exec(t.s.stmts.delEntry, k.Str, "", "", "")
 	case core.KeyTuple:
-		t := k.Tuple
-		res, err = s.exec(s.stmts.delEntry, t.IP, t.Helo, t.From, t.To)
+		tp := k.Tuple
+		res, err = t.exec(t.s.stmts.delEntry, tp.IP, tp.Helo, tp.From, tp.To)
 	default:
 		return false, fmt.Errorf("del: unsupported key type %d", k.Type)
 	}
@@ -430,23 +530,23 @@ func (s *Store) Del(k core.Key) (bool, error) {
 // Iter returns an iterator over the requested entry kinds. The result set
 // is read into memory before the iterator is handed out so that
 // ReplaceCurrent/DeleteCurrent can execute statements on the same
-// connection while iterating.
-func (s *Store) Iter(types core.IterTypes) (core.Iterator, error) {
-	enabled := func(t core.IterTypes) string {
-		if types&t != 0 {
+// transaction while iterating.
+func (t *tx) Iter(types core.IterTypes) (core.Iterator, error) {
+	enabled := func(it core.IterTypes) string {
+		if types&it != 0 {
 			return "1=1"
 		}
 		return "1=0"
 	}
-	q := fmt.Sprintf(s.stmts.iter,
+	q := fmt.Sprintf(t.s.stmts.iter,
 		enabled(core.IterEntries), enabled(core.IterSpamtraps), enabled(core.IterDomains))
-	rows, err := s.query(q)
+	rows, err := t.query(q)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	it := &iterator{s: s, pos: -1}
+	it := &iterator{t: t, pos: -1}
 	for rows.Next() {
 		var (
 			ip, helo, from, to sql.NullString
@@ -489,7 +589,7 @@ type entry struct {
 }
 
 type iterator struct {
-	s    *Store
+	t    *tx
 	rows []entry
 	pos  int
 }
@@ -516,7 +616,7 @@ func (it *iterator) ReplaceCurrent(d core.Data) error {
 	if err != nil {
 		return err
 	}
-	return it.s.Put(k, d)
+	return it.t.Put(k, d)
 }
 
 func (it *iterator) DeleteCurrent() error {
@@ -524,7 +624,7 @@ func (it *iterator) DeleteCurrent() error {
 	if err != nil {
 		return err
 	}
-	_, err = it.s.Del(k)
+	_, err = it.t.Del(k)
 	return err
 }
 
@@ -540,26 +640,29 @@ func (it *iterator) Close() error {
 // The MySQL and PostgreSQL C drivers compared against the database clock
 // (UNIX_TIMESTAMP(), EXTRACT(EPOCH FROM now())); the port binds the now
 // argument everywhere so all drivers agree with the caller's clock.
-func (s *Store) Scan(now, whiteExp int64) (core.ScanResult, error) {
+func (t *tx) Scan(now, whiteExp int64) (core.ScanResult, error) {
 	var res core.ScanResult
+	if t.readOnly {
+		return res, core.ErrReadOnly
+	}
 
 	args := []any{now}
-	if s.dialect.HostScoped {
-		args = append(args, s.host)
+	if t.s.dialect.HostScoped {
+		args = append(args, t.s.host)
 	}
-	if _, err := s.exec(s.stmts.scanDelete, args...); err != nil {
+	if _, err := t.exec(t.s.stmts.scanDelete, args...); err != nil {
 		return res, fmt.Errorf("delete expired entries: %w", err)
 	}
 
 	args = []any{now + whiteExp, now}
-	if s.dialect.HostScoped {
-		args = append(args, s.host)
+	if t.s.dialect.HostScoped {
+		args = append(args, t.s.host)
 	}
-	if _, err := s.exec(s.stmts.scanWhitelist, args...); err != nil {
+	if _, err := t.exec(t.s.stmts.scanWhitelist, args...); err != nil {
 		return res, fmt.Errorf("update db entries: %w", err)
 	}
 
-	rows, err := s.query(s.stmts.scanSelect)
+	rows, err := t.query(t.s.stmts.scanSelect)
 	if err != nil {
 		return res, fmt.Errorf("fetch white/trap entries: %w", err)
 	}

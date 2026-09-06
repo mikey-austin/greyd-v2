@@ -24,6 +24,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -57,8 +58,8 @@ const (
 )
 
 func init() {
-	core.RegisterFirewall(DriverName, func(cfg *config.Config) (core.Firewall, error) {
-		return New(cfg), nil
+	core.RegisterFirewall(DriverName, func(cfg *config.Config, opts core.FirewallOptions) (core.Firewall, error) {
+		return New(cfg, opts), nil
 	})
 }
 
@@ -70,6 +71,7 @@ type Firewall struct {
 	pflogIf       string
 	netIf         string
 	trackOutbound bool
+	log           *slog.Logger
 
 	pfdev  *os.File
 	bpf    int // -1 when no capture is active
@@ -78,8 +80,10 @@ type Firewall struct {
 }
 
 // New reads the "firewall" section options; nothing is opened until Open.
-func New(cfg *config.Config) *Firewall {
+// A nil opts.Log discards diagnostics.
+func New(cfg *config.Config, opts core.FirewallOptions) *Firewall {
 	return &Firewall{
+		log:           logger.Or(opts.Log),
 		pfdevPath:     cfg.Str("pfdev_path", "firewall", defaultPfdevPath),
 		pfctlPath:     cfg.Str("pfctl_path", "firewall", defaultPfctlPath),
 		pflogIf:       cfg.Str("pflog_if", "firewall", defaultPflogIf),
@@ -99,7 +103,7 @@ var nativeBPFLayout = BPFLayout{
 }
 
 // Open opens the PF device read-write (Mod_fw_open).
-func (f *Firewall) Open() error {
+func (f *Firewall) Open(context.Context) error {
 	dev, err := os.OpenFile(f.pfdevPath, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("could not open %s: %w", f.pfdevPath, err)
@@ -122,8 +126,8 @@ func (f *Firewall) Close() error {
 // CIDRs to "pfctl -T replace -f -" (Mod_fw_replace). The C driver handed
 // pfctl its already open descriptor as /dev/fd/N; the device path is
 // passed instead, which behaves identically for a privileged caller and
-// does not depend on fdescfs.
-func (f *Firewall) Replace(set string, cidrs []string, _ core.Family) (int, error) {
+// does not depend on fdescfs. pfctl is killed when ctx is done.
+func (f *Firewall) Replace(ctx context.Context, set string, cidrs []string, _ core.Family) (int, error) {
 	if len(cidrs) == 0 {
 		return 0, nil
 	}
@@ -141,11 +145,14 @@ func (f *Firewall) Replace(set string, cidrs []string, _ core.Family) (int, erro
 		return 0, nil
 	}
 
-	cmd := exec.Command(f.pfctlPath, "-p", f.pfdevPath, "-q", "-t", set, "-T", "replace", "-f", "-")
+	cmd := exec.CommandContext(ctx, f.pfctlPath, "-p", f.pfdevPath, "-q", "-t", set, "-T", "replace", "-f", "-")
 	cmd.Stdin = strings.NewReader(in.String())
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if cerr := ctx.Err(); cerr != nil {
+			return 0, fmt.Errorf("%s: %w", f.pfctlPath, cerr)
+		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			msg := strings.TrimSpace(stderr.String())
@@ -170,7 +177,10 @@ type ifreq struct {
 // StartLogCapture opens a bpf device on the pflog interface in immediate
 // mode with a read timeout (Mod_fw_start_log_capture; the pcap filter is
 // applied in userland by ParseRecord).
-func (f *Firewall) StartLogCapture() error {
+func (f *Firewall) StartLogCapture(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(f.pflogIf) >= unix.IFNAMSIZ {
 		return fmt.Errorf("pflog_if %q is too long", f.pflogIf)
 	}
@@ -275,7 +285,7 @@ func (f *Firewall) CaptureLog(ctx context.Context) ([]string, error) {
 		var addrs []string
 		f.layout.Records(f.bpfBuf[:n], func(pkt []byte) {
 			if len(pkt) < MIN_PFLOG_HDRLEN {
-				logger.Warning("invalid pflog header length (%d/%d). packet dropped.", len(pkt), MIN_PFLOG_HDRLEN)
+				f.log.Warn("invalid pflog header length, packet dropped", "len", len(pkt), "min", MIN_PFLOG_HDRLEN)
 				return
 			}
 			addr, ok := ParseRecord(pkt, f.trackOutbound, f.netIf, unix.AF_INET6)
@@ -286,7 +296,7 @@ func (f *Firewall) CaptureLog(ctx context.Context) ([]string, error) {
 			if pkt[pflogOffDir] == PF_IN {
 				dir = "in"
 			}
-			logger.Debug("packet received: direction = %s, addr = %s", dir, addr)
+			f.log.Debug("packet received", "direction", dir, "addr", addr)
 			addrs = append(addrs, addr)
 		})
 		return addrs, nil
@@ -295,19 +305,23 @@ func (f *Firewall) CaptureLog(ctx context.Context) ([]string, error) {
 
 // LookupOrigDst asks PF for the pre-rdr destination of the connection
 // from src to proxy (Mod_fw_lookup_orig_dst). Any failure, including the
-// absence of a matching state, falls back to the proxy address.
-func (f *Firewall) LookupOrigDst(src, proxy netip.AddrPort) (netip.AddrPort, error) {
+// absence of a matching state, falls back to the proxy address. The
+// DIOCNATLOOK ioctl does not block, so ctx is only checked beforehand.
+func (f *Firewall) LookupOrigDst(ctx context.Context, src, proxy netip.AddrPort) (netip.AddrPort, error) {
+	if err := ctx.Err(); err != nil {
+		return proxy, err
+	}
 	if f.pfdev == nil {
 		return proxy, nil
 	}
 	s, p := src.Addr().Unmap(), proxy.Addr().Unmap()
 	if s.Is4() != p.Is4() {
-		logger.Debug("pf natlook: address family mismatch between %s and %s", src, proxy)
+		f.log.Debug("pf natlook: address family mismatch", "src", src, "proxy", proxy)
 		return proxy, nil
 	}
 	orig, err := natlook(int(f.pfdev.Fd()), netip.AddrPortFrom(s, src.Port()), netip.AddrPortFrom(p, proxy.Port()))
 	if err != nil {
-		logger.Debug("pf natlook for %s -> %s failed: %v", src, proxy, err)
+		f.log.Debug("pf natlook failed", "src", src, "proxy", proxy, "err", err)
 		return proxy, nil
 	}
 	return orig, nil

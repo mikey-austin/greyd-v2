@@ -37,13 +37,13 @@ const (
 	TypeReplace = "replace"
 )
 
-// Message builds a framed message.
-type Message struct {
+// Builder builds a framed message.
+type Builder struct {
 	b strings.Builder
 }
 
 // Int appends an integer assignment.
-func (m *Message) Int(name string, v int) *Message {
+func (m *Builder) Int(name string, v int) *Builder {
 	fmt.Fprintf(&m.b, "%s = %d\n", name, v)
 	return m
 }
@@ -51,19 +51,19 @@ func (m *Message) Int(name string, v int) *Message {
 // Str appends a string assignment. The value is written verbatim, as the C
 // implementation does, so that blacklist messages keep their escape
 // sequences for the receiving parser.
-func (m *Message) Str(name, v string) *Message {
+func (m *Builder) Str(name, v string) *Builder {
 	fmt.Fprintf(&m.b, "%s = \"%s\"\n", name, v)
 	return m
 }
 
 // SafeStr appends a string assignment after removing characters that would
 // corrupt the frame (double quotes and backslashes).
-func (m *Message) SafeStr(name, v string) *Message {
+func (m *Builder) SafeStr(name, v string) *Builder {
 	return m.Str(name, Sanitize(v))
 }
 
 // StrList appends a list of strings.
-func (m *Message) StrList(name string, vals []string) *Message {
+func (m *Builder) StrList(name string, vals []string) *Builder {
 	m.b.WriteString(name)
 	m.b.WriteString("=[")
 	for i, v := range vals {
@@ -79,12 +79,12 @@ func (m *Message) StrList(name string, vals []string) *Message {
 }
 
 // Bytes returns the framed message including its terminator.
-func (m *Message) Bytes() []byte {
+func (m *Builder) Bytes() []byte {
 	return []byte(m.b.String() + Terminator + "\n")
 }
 
 // Send writes the framed message to w.
-func (m *Message) Send(w io.Writer) error {
+func (m *Builder) Send(w io.Writer) error {
 	_, err := w.Write(m.Bytes())
 	return err
 }
@@ -134,7 +134,7 @@ func WriteBlacklist(w io.Writer, name, message string, ips []string) error {
 // WriteGrey sends a greylist tuple from the main process to the greylister
 // (con.c).
 func WriteGrey(w io.Writer, dstIP, ipAddr, helo, from, to string) error {
-	m := &Message{}
+	m := &Builder{}
 	m.Int("type", MsgGrey).SafeStr("dst_ip", dstIP).SafeStr("ip", ipAddr).
 		SafeStr("helo", helo).SafeStr("from", from).SafeStr("to", to)
 	return m.Send(w)
@@ -143,7 +143,7 @@ func WriteGrey(w io.Writer, dstIP, ipAddr, helo, from, to string) error {
 // WriteGreyFromSync forwards a greylist tuple received over the sync
 // protocol (sync.c); sync = 0 stops it being re-broadcast.
 func WriteGreyFromSync(w io.Writer, ipAddr, helo, from, to string) error {
-	m := &Message{}
+	m := &Builder{}
 	m.Int("type", MsgGrey).Int("sync", 0).SafeStr("ip", ipAddr).
 		SafeStr("helo", helo).SafeStr("from", from).SafeStr("to", to)
 	return m.Send(w)
@@ -156,7 +156,7 @@ func WriteAddr(w io.Writer, msgType int, ipAddr, source string, expires uint32, 
 	if del {
 		d = 1
 	}
-	m := &Message{}
+	m := &Builder{}
 	m.Int("type", msgType).Int("sync", 0).SafeStr("ip", ipAddr).SafeStr("source", source).
 		Str("expires", fmt.Sprintf("%d", expires)).Int("delete", d)
 	return m.Send(w)

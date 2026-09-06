@@ -21,10 +21,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -32,10 +34,10 @@ import (
 	"golang.org/x/net/ipv4"
 	"golang.org/x/sys/unix"
 
-	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
 	"github.com/mikey-austin/greyd-golang/internal/ipc"
 	"github.com/mikey-austin/greyd-golang/internal/logger"
+	"github.com/mikey-austin/greyd-golang/internal/settings"
 )
 
 type host struct {
@@ -45,9 +47,11 @@ type host struct {
 
 // Engine sends and receives synchronisation messages.
 type Engine struct {
-	cfg       *config.Config
+	cfg       settings.Sync
+	log       *slog.Logger
 	port      int
 	key       Key
+	keyed     bool
 	counter   atomic.Uint32
 	hosts     []host
 	iface     string
@@ -56,34 +60,41 @@ type Engine struct {
 	syncIn    netip.Addr   // address of the multicast interface
 	syncOut   *net.UDPAddr // multicast destination
 	greyOK    bool
+
+	replayMu sync.Mutex
+	replay   map[netip.Addr]*replayState
 }
 
-// New creates an engine from the sync configuration section. It returns
-// nil, nil when synchronisation is disabled (sync.enable = 0).
-func New(cfg *config.Config) (*Engine, error) {
-	if !cfg.Bool("enable", "sync", false) {
+// New creates an engine from the sync settings. It returns nil, nil when
+// synchronisation is disabled (sync.enable = 0). greyEnabled controls
+// whether received entries are forwarded to the greylister.
+func New(cfg settings.Sync, greyEnabled bool, log *slog.Logger) (*Engine, error) {
+	if !cfg.Enable {
 		return nil, nil
 	}
-	e := &Engine{cfg: cfg, port: cfg.Int("port", "sync", DefaultPort)}
-	e.greyOK = cfg.Bool("enable", "grey", true)
+	e := &Engine{cfg: cfg, log: logger.Or(log), port: cfg.Port, greyOK: greyEnabled, replay: make(map[netip.Addr]*replayState)}
 
-	for _, h := range cfg.StrList("hosts", "sync") {
+	for _, h := range cfg.Hosts {
 		if err := e.AddHost(h); err != nil {
 			// Not a host address, so treat it as an interface name.
 			e.iface = h
 		}
 	}
 
-	if cfg.Bool("verify", "sync", true) {
-		path := cfg.Str("key", "sync", DefaultKey)
-		k, _, err := LoadKey(path)
+	if cfg.Verify {
+		k, ok, err := LoadKey(cfg.Key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read sync key: %w", err)
 		}
 		e.key = k
+		e.keyed = ok
 	}
 	return e, nil
 }
+
+// Keyed reports whether a key file was loaded (messages are authenticated
+// with a real secret).
+func (e *Engine) Keyed() bool { return e.keyed }
 
 // AddHost adds a unicast target; the name must resolve to an IPv4
 // address.
@@ -96,7 +107,7 @@ func (e *Engine) AddHost(name string) error {
 		if v4 := ip.To4(); v4 != nil {
 			h := host{name: name, addr: &net.UDPAddr{IP: v4, Port: e.port}}
 			e.hosts = append(e.hosts, h)
-			logger.Debug("added spam sync host %s (address %s, port %d)", name, v4, e.port)
+			e.log.Debug("added spam sync host", "host", name, "address", v4.String(), "port", e.port)
 			return nil
 		}
 	}
@@ -115,9 +126,12 @@ func (e *Engine) Hosts() []string {
 // Start opens the socket and joins the multicast group when an interface
 // is configured (Sync_start).
 func (e *Engine) Start() error {
-	bindAddr := e.cfg.Str("bind_address", "sync", "")
+	bindAddr := e.cfg.BindAddress
 	if e.iface != "" {
 		e.sendMcast = true
+	}
+	if !e.keyed {
+		e.log.Warn("no sync key loaded; synchronisation messages are not authenticated", "key", e.cfg.Key)
 	}
 
 	bindIP := net.IPv4zero
@@ -160,7 +174,7 @@ func (e *Engine) Start() error {
 	}
 
 	ifName := e.iface
-	ttl := e.cfg.Int("ttl", "sync", DefaultTTL)
+	ttl := e.cfg.TTL
 	if i := strings.IndexByte(ifName, ':'); i >= 0 {
 		t, err := strconv.Atoi(ifName[i+1:])
 		if err != nil || t <= 0 || t > 255 {
@@ -192,7 +206,7 @@ func (e *Engine) Start() error {
 		return fmt.Errorf("interface %s has no IPv4 address", ifName)
 	}
 
-	mcast := net.ParseIP(e.cfg.Str("mcast_address", "sync", MulticastAddr))
+	mcast := net.ParseIP(e.cfg.McastAddress)
 	if mcast == nil || mcast.To4() == nil {
 		_ = e.conn.Close()
 		return fmt.Errorf("invalid mcast_address")
@@ -210,14 +224,14 @@ func (e *Engine) Start() error {
 		return fmt.Errorf("failed to set multicast ttl to %d: %w", ttl, err)
 	}
 	if err := p.SetMulticastInterface(ifi); err != nil {
-		logger.Warning("failed to set multicast interface %s: %v", ifName, err)
+		e.log.Warn("failed to set multicast interface", "interface", ifName, "err", err)
 	}
 
-	mode := "receive "
+	mode := "receive"
 	if e.sendMcast {
-		mode = ""
+		mode = "send+receive"
 	}
-	logger.Debug("using multicast spam sync %smode (ttl %d, group %s, port %d)", mode, ttl, mcast, e.port)
+	e.log.Debug("using multicast spam sync", "mode", mode, "ttl", ttl, "group", mcast.String(), "port", e.port)
 	return nil
 }
 
@@ -254,33 +268,37 @@ func (e *Engine) Recv(greyOut io.Writer) error {
 		}
 	}
 	src := from.IP.String()
+	log := e.log.With("source", src)
 
-	entries, err := Decode(&e.key, buf[:n])
+	pkt, err := Decode(&e.key, buf[:n])
 	if err != nil {
-		logger.Debug("%s (sync): truncated or invalid packet", src)
+		log.Debug("sync: truncated or invalid packet")
 		return nil
 	}
-	logger.Debug("%s (sync): received packet of %d bytes", src, n)
+	if !e.acceptCounter(from, pkt.Counter) {
+		log.Warn("sync: replayed or stale packet dropped", "counter", pkt.Counter)
+		return nil
+	}
+	log.Debug("sync: received packet", "bytes", n, "counter", pkt.Counter)
 
-	for _, ent := range entries {
+	for _, ent := range pkt.Entries {
 		switch ent.Type {
 		case TypeGrey:
-			logger.Debug("%s (sync): received grey entry from %s to %s, helo %s ip %s",
-				src, ent.From, ent.To, ent.Helo, ent.IP)
+			log.Debug("sync: received grey entry", "from", ent.From, "to", ent.To, "helo", ent.Helo, "ip", ent.IP.String())
 			if e.greyOK && greyOut != nil {
 				if err := ipc.WriteGreyFromSync(greyOut, ent.IP.String(), ent.Helo, ent.From, ent.To); err != nil {
 					return err
 				}
 			}
 		case TypeWhite, TypeDelWhite:
-			logger.Debug("%s (sync): received white entry ip %s (%s)", src, ent.IP, addDel(ent.Delete))
+			log.Debug("sync: received white entry", "ip", ent.IP.String(), "op", addDel(ent.Delete))
 			if e.greyOK && greyOut != nil {
 				if err := ipc.WriteAddr(greyOut, ipc.MsgWhite, ent.IP.String(), src, ent.Expire, ent.Delete); err != nil {
 					return err
 				}
 			}
 		case TypeTrapped, TypeDelTrapped:
-			logger.Debug("%s (sync): received trapped entry ip %s (%s)", src, ent.IP, addDel(ent.Delete))
+			log.Debug("sync: received trapped entry", "ip", ent.IP.String(), "op", addDel(ent.Delete))
 			if e.greyOK && greyOut != nil {
 				if err := ipc.WriteAddr(greyOut, ipc.MsgTrap, ent.IP.String(), src, ent.Expire, ent.Delete); err != nil {
 					return err
@@ -296,6 +314,69 @@ func addDel(del bool) string {
 		return "deletion"
 	}
 	return "addition"
+}
+
+// replayState is a sliding anti-replay window per peer: the highest
+// counter seen and a bitmap of the counters just below it.
+type replayState struct {
+	hi     uint32
+	bitmap uint64
+	seen   bool
+}
+
+// acceptCounter applies the replay window (sync.replay_window, 0 disables
+// it). Counters restart at 0 when a peer restarts, so a small counter far
+// below the window is treated as a restart rather than a replay.
+func (e *Engine) acceptCounter(from *net.UDPAddr, counter uint32) bool {
+	window := uint32(e.cfg.ReplayWindow)
+	if window == 0 {
+		return true
+	}
+	if window > 64 {
+		window = 64
+	}
+	addr, ok := netip.AddrFromSlice(from.IP)
+	if !ok {
+		return true
+	}
+	addr = addr.Unmap()
+
+	e.replayMu.Lock()
+	defer e.replayMu.Unlock()
+	st := e.replay[addr]
+	if st == nil {
+		st = &replayState{}
+		e.replay[addr] = st
+	}
+	if !st.seen {
+		st.seen, st.hi, st.bitmap = true, counter, 1
+		return true
+	}
+	switch {
+	case counter > st.hi:
+		shift := counter - st.hi
+		if shift >= 64 {
+			st.bitmap = 0
+		} else {
+			st.bitmap <<= shift
+		}
+		st.bitmap |= 1
+		st.hi = counter
+		return true
+	case st.hi-counter < window:
+		bit := uint64(1) << (st.hi - counter)
+		if st.bitmap&bit != 0 {
+			return false // duplicate
+		}
+		st.bitmap |= bit
+		return true
+	case counter < window:
+		// Peer restarted: start a fresh window.
+		st.hi, st.bitmap = counter, 1
+		return true
+	default:
+		return false
+	}
 }
 
 // Serve receives packets until ctx is done.
@@ -320,7 +401,7 @@ func (e *Engine) Update(t core.Tuple, now time.Time) {
 	if err != nil {
 		return
 	}
-	logger.Debug("sync grey update helo %s ip %s from %s to %s", t.Helo, t.IP, t.From, t.To)
+	e.log.Debug("sync grey update", "helo", t.Helo, "ip", t.IP, "from", t.From, "to", t.To)
 	pkt := EncodeGrey(&e.key, e.counter.Add(1)-1, ip, t.Helo, t.From, t.To, uint32(now.Unix()))
 	e.send(pkt)
 }
@@ -359,7 +440,7 @@ func (e *Engine) sendAddr(ipStr string, now, expire time.Time, typ uint16) {
 	case TypeDelTrapped:
 		name = "deletion of trapped"
 	}
-	logger.Debug("sync %s %s", name, ipStr)
+	e.log.Debug("sync address update", "kind", name, "ip", ipStr)
 	pkt := EncodeAddr(&e.key, e.counter.Add(1)-1, typ, ip, uint32(now.Unix()), uint32(expire.Unix()))
 	e.send(pkt)
 }
@@ -369,15 +450,15 @@ func (e *Engine) send(pkt []byte) {
 		return
 	}
 	if e.sendMcast && e.syncOut != nil {
-		logger.Debug("sending multicast sync message")
+		e.log.Debug("sending multicast sync message")
 		if _, err := e.conn.WriteToUDP(pkt, e.syncOut); err != nil {
-			logger.Warning("sendmsg: %v", err)
+			e.log.Warn("sendmsg failed", "err", err)
 		}
 	}
 	for _, h := range e.hosts {
-		logger.Debug("sending sync message to %s (%s)", h.name, h.addr.IP)
+		e.log.Debug("sending sync message", "host", h.name, "address", h.addr.IP.String())
 		if _, err := e.conn.WriteToUDP(pkt, h.addr); err != nil {
-			logger.Warning("sendmsg: %v", err)
+			e.log.Warn("sendmsg failed", "host", h.name, "err", err)
 		}
 	}
 }

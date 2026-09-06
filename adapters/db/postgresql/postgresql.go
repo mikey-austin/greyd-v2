@@ -22,9 +22,14 @@
 // used as the host when set). The tables of postgresql_schema.sql are
 // created when missing. Rows in entries are tagged with the greyd
 // hostname so several instances can share one database.
+//
+// Transactions come from database/sql's BeginTx on the connection pool
+// (BEGIN, READ ONLY for View). Nested transactions (View or Update called
+// from within a transaction function) are not supported.
 package postgresql
 
 import (
+	"context"
 	"database/sql"
 	_ "embed"
 	"fmt"
@@ -36,6 +41,7 @@ import (
 	"github.com/mikey-austin/greyd-golang/adapters/db/sqlcommon"
 	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
+	"github.com/mikey-austin/greyd-golang/internal/logger"
 )
 
 // DriverName is the configuration driver value.
@@ -61,7 +67,6 @@ var dialect = sqlcommon.Dialect{
 	NumberedParams: true,
 	Quote:          '"',
 	HostScoped:     true,
-	Begin:          "BEGIN",
 	UpsertEntry: "INSERT INTO entries " +
 		"(`ip`, `helo`, `from`, `to`, `first`, `pass`, `expire`, `bcount`, `pcount`, `greyd_host`) " +
 		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
@@ -90,7 +95,7 @@ type Store struct {
 
 // New creates the store; the connection is made by Open.
 func New(cfg *config.Config, opts core.StoreOptions) *Store {
-	return &Store{Store: sqlcommon.NewStore(dialect, opts.Hostname), cfg: cfg}
+	return &Store{Store: sqlcommon.NewStore(dialect, opts.Hostname, logger.Or(opts.Log)), cfg: cfg}
 }
 
 // ConnString builds the libpq style connection string from the "database"
@@ -128,18 +133,16 @@ func quoteParam(v string) string {
 }
 
 // Open connects and ensures the schema exists. It is a no-op on an open
-// store.
-func (s *Store) Open(core.OpenMode) error {
+// store. A store opened read-only refuses Update.
+func (s *Store) Open(ctx context.Context, mode core.OpenMode) error {
 	if s.Opened() {
 		return nil
 	}
-	dsn := s.ConnString()
-	db, err := sql.Open("pgx", dsn)
+	db, err := sql.Open("pgx", s.ConnString())
 	if err != nil {
 		return fmt.Errorf("could not connect to postgresql: %w", err)
 	}
-	db.SetMaxOpenConns(1)
-	if err := s.Attach(db, sqlcommon.SplitStatements(schemaSQL)); err != nil {
+	if err := s.Attach(ctx, db, mode, sqlcommon.SplitStatements(schemaSQL)); err != nil {
 		return fmt.Errorf("could not connect to postgresql: %w", err)
 	}
 	return nil

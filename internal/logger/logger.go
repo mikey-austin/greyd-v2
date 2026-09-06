@@ -14,19 +14,40 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-// Package logger implements the program-wide logging facility. Messages go
-// to syslog (facility daemon), optionally to a log file, and always to
-// standard error, mirroring log.c and failures.c of the C implementation.
+// Package logger provides the log/slog handler used by the greyd programs.
+// Records go to syslog (facility daemon), optionally to a log file
+// (log_to_file) and always to standard error, in the line format of the C
+// implementation ("ident[pid]: message key=value ..."). Libraries receive
+// a *slog.Logger; nothing in this package is global.
 package logger
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
+	"strconv"
 	"sync"
 
 	"golang.org/x/sys/unix"
 )
+
+// Options configure a handler.
+type Options struct {
+	// Ident is the program name prefixed to every line.
+	Ident string
+	// Debug enables debug level records.
+	Debug bool
+	// Syslog enables the syslog sink.
+	Syslog bool
+	// File, when non-empty, is appended to (log_to_file).
+	File string
+	// Stderr receives every record; defaults to os.Stderr. Use io.Discard
+	// to silence it.
+	Stderr io.Writer
+}
 
 // Severity levels, numerically compatible with syslog priorities.
 type Severity int
@@ -39,81 +60,67 @@ const (
 	SevDebug   Severity = 7
 )
 
-// Options configures the logger.
-type Options struct {
-	// Ident is the program name prefixed to every message.
-	Ident string
-	// Debug enables debug level messages.
-	Debug bool
-	// Syslog enables the syslog sink.
-	Syslog bool
-	// File, when non-empty, is appended to (log_to_file).
-	File string
-	// Stderr receives every message; defaults to os.Stderr.
-	Stderr io.Writer
-}
-
 // syslogSink abstracts the platform syslog connection so tests can stub it.
 type syslogSink interface {
 	Write(sev Severity, msg string) error
 	Close() error
 }
 
-var (
-	mu       sync.Mutex
-	ident    = "greyd"
-	debug    bool
-	sysl     syslogSink
-	logFile  *os.File
-	stderr   io.Writer = os.Stderr
-	exitFunc           = os.Exit
-	// openSyslog is a hook replaced by the platform implementation.
-	openSyslog = func(ident string) (syslogSink, error) { return nil, nil }
-)
+// openSyslog is replaced by the platform implementation.
+var openSyslog = func(ident string) (syslogSink, error) { return nil, nil }
 
-// Setup initialises the logging system. It may be called more than once;
-// later calls replace earlier settings.
-func Setup(o Options) error {
-	mu.Lock()
-	defer mu.Unlock()
+// Handler is a slog.Handler writing greyd style lines to the sinks.
+type Handler struct {
+	ident string
+	debug bool
 
-	if o.Ident != "" {
-		ident = o.Ident
+	mu     *sync.Mutex
+	sysl   syslogSink
+	file   *os.File
+	stderr io.Writer
+
+	// pre holds attributes added with With, already prefixed with the
+	// groups open at the time.
+	pre    []preAttr
+	groups []string
+}
+
+type preAttr struct {
+	prefix string
+	attr   slog.Attr
+}
+
+// New creates a logger. Failing to reach syslog is not fatal: a warning is
+// written to stderr and the remaining sinks are used.
+func New(o Options) (*slog.Logger, *Handler, error) {
+	h := &Handler{ident: o.Ident, debug: o.Debug, mu: &sync.Mutex{}, stderr: o.Stderr}
+	if h.ident == "" {
+		h.ident = "greyd"
 	}
-	debug = o.Debug
-	if o.Stderr != nil {
-		stderr = o.Stderr
-	} else {
-		stderr = os.Stderr
-	}
-
-	if sysl != nil {
-		_ = sysl.Close()
-		sysl = nil
+	if h.stderr == nil {
+		h.stderr = os.Stderr
 	}
 	if o.Syslog {
-		s, err := openSyslog(ident)
+		s, err := openSyslog(h.ident)
 		if err != nil {
-			return fmt.Errorf("openlog: %w", err)
+			fmt.Fprintf(h.stderr, "%s: syslog unavailable: %v\n", h.ident, err)
+		} else {
+			h.sysl = s
 		}
-		sysl = s
 	}
-
-	return reinitLocked(o.File)
+	if err := h.Reopen(o.File); err != nil {
+		return nil, nil, err
+	}
+	return slog.New(h), h, nil
 }
 
-// Reinit re-opens the log file (used by child processes after re-exec, as
-// Log_reinit is used after fork in the C implementation).
-func Reinit(file string) error {
-	mu.Lock()
-	defer mu.Unlock()
-	return reinitLocked(file)
-}
-
-func reinitLocked(file string) error {
-	if logFile != nil {
-		_ = logFile.Close()
-		logFile = nil
+// Reopen (re)opens the log file; an empty path closes it.
+func (h *Handler) Reopen(file string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.file != nil {
+		_ = h.file.Close()
+		h.file = nil
 	}
 	if file == "" {
 		return nil
@@ -122,67 +129,142 @@ func reinitLocked(file string) error {
 	if err != nil {
 		return fmt.Errorf("open log file %s: %w", file, err)
 	}
-	logFile = f
+	h.file = f
 	return nil
 }
 
-// SetExit replaces the process exit function used by Fatal (tests only).
-func SetExit(f func(int)) {
-	mu.Lock()
-	defer mu.Unlock()
-	exitFunc = f
+// Close releases the sinks.
+func (h *Handler) Close() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.sysl != nil {
+		_ = h.sysl.Close()
+		h.sysl = nil
+	}
+	if h.file != nil {
+		_ = h.file.Close()
+		h.file = nil
+	}
+	return nil
 }
 
-// Debugging reports whether debug output is enabled.
-func Debugging() bool {
-	mu.Lock()
-	defer mu.Unlock()
-	return debug
+// Enabled implements slog.Handler.
+func (h *Handler) Enabled(_ context.Context, l slog.Level) bool {
+	return h.debug || l > slog.LevelDebug
 }
 
-// Debug logs a message which is suppressed unless debugging is enabled.
-func Debug(format string, a ...any) { write(SevDebug, format, a...) }
+// Handle implements slog.Handler.
+func (h *Handler) Handle(_ context.Context, r slog.Record) error {
+	var b bytes.Buffer
+	b.WriteString(r.Message)
+	prefix := h.prefix()
+	for _, p := range h.pre {
+		writeAttr(&b, p.prefix, p.attr)
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		writeAttr(&b, prefix, a)
+		return true
+	})
+	msg := b.String()
 
-// Info logs an informational message.
-func Info(format string, a ...any) { write(SevInfo, format, a...) }
+	sev := severity(r.Level)
+	line := fmt.Sprintf("%s[%d]: %s\n", h.ident, os.Getpid(), msg)
 
-// Warning logs a warning message.
-func Warning(format string, a ...any) { write(SevWarning, format, a...) }
-
-// Error logs an error message.
-func Error(format string, a ...any) { write(SevErr, format, a...) }
-
-// Fatal logs a critical message and terminates the process with status 1,
-// like i_critical in the C implementation.
-func Fatal(format string, a ...any) {
-	write(SevCrit, format, a...)
-	mu.Lock()
-	f := exitFunc
-	mu.Unlock()
-	f(1)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.sysl != nil {
+		_ = h.sysl.Write(sev, msg)
+	}
+	if h.file != nil {
+		writeLocked(h.file, line)
+	}
+	if h.stderr != nil {
+		_, _ = io.WriteString(h.stderr, line)
+	}
+	return nil
 }
 
-func write(sev Severity, format string, a ...any) {
-	mu.Lock()
-	defer mu.Unlock()
-
-	if sev == SevDebug && !debug {
+func writeAttr(b *bytes.Buffer, prefix string, a slog.Attr) {
+	if a.Equal(slog.Attr{}) {
 		return
 	}
-	msg := fmt.Sprintf(format, a...)
-
-	if sysl != nil {
-		_ = sysl.Write(sev, msg)
+	if a.Value.Kind() == slog.KindGroup {
+		for _, g := range a.Value.Group() {
+			writeAttr(b, prefix+a.Key+".", g)
+		}
+		return
 	}
-
-	line := fmt.Sprintf("%s[%d]: %s\n", ident, os.Getpid(), msg)
-	if logFile != nil {
-		writeLocked(logFile, line)
-	}
-	if stderr != nil {
-		_, _ = io.WriteString(stderr, line)
+	b.WriteByte(' ')
+	b.WriteString(prefix)
+	b.WriteString(a.Key)
+	b.WriteByte('=')
+	v := a.Value.Resolve().String()
+	if needsQuote(v) {
+		b.WriteString(strconv.Quote(v))
+	} else {
+		b.WriteString(v)
 	}
 }
+
+func needsQuote(s string) bool {
+	if s == "" {
+		return true
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c <= ' ' || c == '"' || c == '=' || c > 0x7e {
+			return true
+		}
+	}
+	return false
+}
+
+func severity(l slog.Level) Severity {
+	switch {
+	case l >= slog.LevelError+4:
+		return SevCrit
+	case l >= slog.LevelError:
+		return SevErr
+	case l >= slog.LevelWarn:
+		return SevWarning
+	case l >= slog.LevelInfo:
+		return SevInfo
+	default:
+		return SevDebug
+	}
+}
+
+func (h *Handler) prefix() string {
+	p := ""
+	for _, g := range h.groups {
+		p += g + "."
+	}
+	return p
+}
+
+// WithAttrs implements slog.Handler.
+func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	c := *h
+	c.pre = append([]preAttr{}, h.pre...)
+	prefix := h.prefix()
+	for _, a := range attrs {
+		c.pre = append(c.pre, preAttr{prefix: prefix, attr: a})
+	}
+	return &c
+}
+
+// WithGroup implements slog.Handler.
+func (h *Handler) WithGroup(name string) slog.Handler {
+	if name == "" {
+		return h
+	}
+	c := *h
+	c.groups = append(append([]string{}, h.groups...), name)
+	return &c
+}
+
+// LevelCrit is the level used for fatal conditions (mapped to LOG_CRIT).
+const LevelCrit = slog.LevelError + 4
 
 // writeLocked appends a line to the file while holding an exclusive fcntl
 // lock over the whole file, so several greyd processes can share one log.
@@ -194,4 +276,17 @@ func writeLocked(f *os.File, line string) {
 	_, _ = f.WriteString(line)
 	lock.Type = unix.F_UNLCK
 	_ = unix.FcntlFlock(f.Fd(), unix.F_SETLK, &lock)
+}
+
+// Discard returns a logger that drops everything (tests, nil defaults).
+func Discard() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// Or returns l when non-nil, otherwise a discarding logger.
+func Or(l *slog.Logger) *slog.Logger {
+	if l == nil {
+		return Discard()
+	}
+	return l
 }

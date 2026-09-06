@@ -21,18 +21,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/netip"
 	"os"
 	"os/user"
 	"sync"
 
-	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
 	"github.com/mikey-austin/greyd-golang/internal/ip"
 	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/logger"
 	"github.com/mikey-austin/greyd-golang/internal/privs"
 	"github.com/mikey-austin/greyd-golang/internal/procs"
+	"github.com/mikey-austin/greyd-golang/internal/settings"
 )
 
 // Names of the descriptors passed to the firewall child.
@@ -76,37 +76,32 @@ func inheritedFwFiles() (fwFiles, error) {
 // firewall handle, answers NAT lookups from the main process and applies
 // whitelist updates from the greylister. It runs as the main user, chrooted
 // unless the pf driver is in use.
-func runFwChild(ctx context.Context, cfg *config.Config, files fwFiles) error {
+func runFwChild(ctx context.Context, s *settings.Settings, files fwFiles, log *slog.Logger) error {
 	defer files.closeAll()
 
-	fw, err := core.OpenFirewall(cfg)
+	fw, err := core.OpenFirewall(ctx, s.Raw(), core.FirewallOptions{Log: log})
 	if err != nil {
 		return err
 	}
 	defer fw.Close()
 
-	if err := dropMainPrivs(cfg, driverIsPF(cfg)); err != nil {
+	if err := dropMainPrivs(s, driverIsPF(s)); err != nil {
 		return err
 	}
 
-	var fwMu sync.Mutex
+	h := &fwHandler{fw: fw, out: files.natOut, log: log}
 	handle := func(r io.Reader) error {
 		rd := ipc.NewReader(r)
 		for {
 			m, err := rd.Next()
 			if err != nil {
-				if errors.Is(err, io.EOF) {
+				if errors.Is(err, io.EOF) || ctx.Err() != nil {
 					return nil
 				}
-				if ctx.Err() != nil {
-					return nil
-				}
-				logger.Warning("firewall process: parse error: %v", err)
+				log.Warn("firewall process: bad message", "err", err)
 				continue
 			}
-			fwMu.Lock()
-			processFwMessage(m, fw, files.natOut)
-			fwMu.Unlock()
+			h.process(ctx, m)
 		}
 	}
 
@@ -116,48 +111,40 @@ func runFwChild(ctx context.Context, cfg *config.Config, files fwFiles) error {
 
 	select {
 	case <-ctx.Done():
-		logger.Info("stopping firewall process")
 	case err := <-errc:
 		if err != nil {
 			return err
 		}
 		// One pipe closed: the parent is going away.
-		logger.Info("stopping firewall process")
 	}
+	log.Info("stopping firewall process")
 	return nil
 }
 
 // driverIsPF reports whether the configured firewall driver is pf, which
 // needs filesystem access (pfctl) and so is not chrooted (WITH_PF in C).
-func driverIsPF(cfg *config.Config) bool {
-	sec := cfg.Section("firewall")
-	if sec == nil {
-		return false
-	}
-	return core.NormalizeDriver(sec.Str("driver", "")) == "pf"
+func driverIsPF(s *settings.Settings) bool {
+	return core.NormalizeDriver(s.Firewall.Driver) == "pf"
 }
 
 // dropMainPrivs chroots (unless skipChroot) and switches to the main user
 // according to the configuration.
-func dropMainPrivs(cfg *config.Config, skipChroot bool) error {
-	mainUser := cfg.Str("user", "", MainUser)
-	dropPrivs := cfg.Bool("drop_privs", "", true)
-
+func dropMainPrivs(s *settings.Settings, skipChroot bool) error {
 	// The user database is not reachable from inside the jail, so the
 	// lookup must precede the chroot.
 	var u *user.User
-	if dropPrivs {
+	if s.DropPrivs {
 		var err error
-		if u, err = privs.LookupUser(mainUser); err != nil {
+		if u, err = privs.LookupUser(s.User); err != nil {
 			return err
 		}
 	}
-	if !skipChroot && cfg.Bool("chroot", "", DefaultChroot == 1) {
-		if err := privs.Chroot(cfg.Str("chroot_dir", "", ChrootDir)); err != nil {
+	if !skipChroot && s.Chroot {
+		if err := privs.Chroot(s.ChrootDir); err != nil {
 			return err
 		}
 	}
-	if dropPrivs {
+	if s.DropPrivs {
 		if err := privs.Drop(u); err != nil {
 			return fmt.Errorf("failed to drop privileges: %w", err)
 		}
@@ -165,51 +152,64 @@ func dropMainPrivs(cfg *config.Config, skipChroot bool) error {
 	return nil
 }
 
-// processFwMessage handles one request (Greyd_process_fw_message).
-func processFwMessage(m *config.Config, fw core.Firewall, out io.Writer) {
-	typ := m.Str("type", "", "")
-	switch typ {
-	case ipc.TypeNAT:
-		src := m.Str("src", "", "")
-		proxy := m.Str("proxy", "", "")
-		srcPort := m.Int("src_port", "", 0)
-		proxyPort := m.Int("proxy_port", "", 0)
-		if srcPort == 0 || proxyPort == 0 {
-			logger.Debug("nat lookup: expecting non-zero src & proxy ports")
-			return
-		}
-		srcAddr, err1 := netip.ParseAddr(src)
-		proxyAddr, err2 := netip.ParseAddr(proxy)
-		if err1 != nil || err2 != nil {
-			logger.Debug("nat lookup: bad addresses %q %q", src, proxy)
-			return
-		}
-		dst := ""
-		res, err := fw.LookupOrigDst(netip.AddrPortFrom(srcAddr, uint16(srcPort)), netip.AddrPortFrom(proxyAddr, uint16(proxyPort)))
-		if err == nil && res.IsValid() {
-			dst = res.Addr().Unmap().String()
-		} else if err != nil {
-			logger.Debug("nat lookup failed: %v", err)
-		}
-		if out != nil {
-			if err := ipc.WriteDst(out, dst); err != nil {
-				logger.Debug("dnat lookup: write failed: %v", err)
-			}
-		}
+// fwHandler serialises requests against the firewall handle.
+type fwHandler struct {
+	mu  sync.Mutex
+	fw  core.Firewall
+	out io.Writer
+	log *slog.Logger
+}
 
-	case ipc.TypeReplace:
-		name := m.Str("name", "", "")
-		af := core.Family(m.Int("af", "", int(core.IPv4)))
-		var addrs []string
-		for _, a := range m.StrList("ips", "") {
-			if ip.CheckAddr(a) != -1 {
-				addrs = append(addrs, a)
-			}
+// process handles one request (Greyd_process_fw_message).
+func (h *fwHandler) process(ctx context.Context, m ipc.Message) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	switch m := m.(type) {
+	case *ipc.NATRequest:
+		h.lookup(ctx, m)
+	case *ipc.ReplaceRequest:
+		h.replace(ctx, m)
+	default:
+		h.log.Debug("firewall process: ignoring unexpected message")
+	}
+}
+
+func (h *fwHandler) lookup(ctx context.Context, m *ipc.NATRequest) {
+	if m.SrcPort == 0 || m.ProxyPort == 0 {
+		h.log.Debug("nat lookup: expecting non-zero src & proxy ports")
+		return
+	}
+	srcAddr, err1 := netip.ParseAddr(m.Src)
+	proxyAddr, err2 := netip.ParseAddr(m.Proxy)
+	if err1 != nil || err2 != nil {
+		h.log.Debug("nat lookup: bad addresses", "src", m.Src, "proxy", m.Proxy)
+		return
+	}
+	dst := ""
+	res, err := h.fw.LookupOrigDst(ctx, netip.AddrPortFrom(srcAddr, m.SrcPort), netip.AddrPortFrom(proxyAddr, m.ProxyPort))
+	if err == nil && res.IsValid() {
+		dst = res.Addr().Unmap().String()
+	} else if err != nil {
+		h.log.Debug("nat lookup failed", "err", err)
+	}
+	if h.out != nil {
+		if err := ipc.WriteDst(h.out, dst); err != nil {
+			h.log.Debug("dnat lookup: write failed", "err", err)
 		}
-		if len(addrs) > 0 {
-			if _, err := fw.Replace(name, addrs, af); err != nil {
-				logger.Warning("firewall replace %s failed: %v", name, err)
-			}
+	}
+}
+
+func (h *fwHandler) replace(ctx context.Context, m *ipc.ReplaceRequest) {
+	var addrs []string
+	for _, a := range m.IPs {
+		if ip.CheckAddr(a) != -1 {
+			addrs = append(addrs, a)
 		}
+	}
+	if len(addrs) == 0 {
+		return
+	}
+	if _, err := h.fw.Replace(ctx, m.Set, addrs, core.Family(m.AF)); err != nil {
+		h.log.Warn("firewall replace failed", "set", m.Set, "err", err)
 	}
 }

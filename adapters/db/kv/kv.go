@@ -22,6 +22,7 @@ package kv
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -122,7 +123,12 @@ func DomainMatches(domain, addr string) bool {
 	return strings.HasSuffix(strings.ToLower(addr), strings.ToLower(domain))
 }
 
-// Ops is the subset of store operations the scan needs.
+// ErrNoCurrent is returned by iterator mutations before the first Next
+// or after the end.
+var ErrNoCurrent = errors.New("iterator has no current entry")
+
+// Ops is the subset of transaction operations the scan needs; core.Tx
+// satisfies it.
 type Ops interface {
 	Iter(types core.IterTypes) (core.Iterator, error)
 	Put(k core.Key, d core.Data) error

@@ -111,6 +111,21 @@ setrlimit = 1
 # max_cons_black = 800
 
 #
+# Limit simultaneous connections from a single client address
+# (0 = unlimited) and the length of an SMTP command line.
+#
+# max_cons_per_source = 0
+# max_line_length = 8191
+
+#
+# Accept blacklist configuration on a unix socket (checked against the
+# connecting user's credentials) rather than the loopback TCP port, and
+# bound the size of a single blacklist.
+#
+# config_socket = "@localstatedir@/run/greyd/config.sock"
+# max_config_frame = 67108864
+
+#
 # The firewall configuration.
 #
 section firewall {
@@ -170,6 +185,9 @@ section sync {
     #key           = "@sysconfdir@/@PACKAGE@/greyd.key"
     #bind_address  = "eth0:2"
     #mcast_address = "224.0.1.241"
+
+    # Drop replayed messages (0 disables the counter check).
+    #replay_window = 64
 }
 
 #
@@ -223,6 +241,9 @@ section grey {
     # domains loaded, everything will be trapped.
     #
     #db_permitted_domains = 0
+
+    # Cap on the number of permitted domains loaded from the file.
+    #max_domains = 100000
 }
 
 #
@@ -236,6 +257,9 @@ section setup {
     #
     lists     = [ "nixspam", "uatraps" ]
     curl_path = "@CURL@"
+
+    # Cap on the number of addresses read from one list.
+    #max_entries = 10000000
 }
 
 blacklist uatraps {

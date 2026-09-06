@@ -34,6 +34,7 @@ import (
 	"github.com/mikey-austin/greyd-golang/internal/config"
 	_ "github.com/mikey-austin/greyd-golang/internal/config/parse"
 	"github.com/mikey-austin/greyd-golang/internal/core"
+	"github.com/mikey-austin/greyd-golang/internal/logger"
 )
 
 func TestParseFlags(t *testing.T) {
@@ -129,18 +130,29 @@ func (r *recordingSyncer) White(ip string, now, expire time.Time, del bool) {
 }
 
 func TestProcessAddresses(t *testing.T) {
+	ctx := context.Background()
+	var logBuf bytes.Buffer
+	log, h, err := logger.New(logger.Options{Ident: "test", Stderr: &logBuf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+
 	store := memory.New()
+	if err := store.Open(ctx, core.OpenRW); err != nil {
+		t.Fatal(err)
+	}
 	syncer := &recordingSyncer{}
 	now := time.Unix(1_000_000, 0)
 	const whiteExp = int64(3600)
 
 	addrs := []string{"10.0.0.1", "192.168.1.2"}
-	if err := processAddresses(store, addrs, now, whiteExp, syncer); err != nil {
+	if err := processAddresses(ctx, log, store, addrs, now, whiteExp, syncer); err != nil {
 		t.Fatalf("processAddresses: %v", err)
 	}
 
 	for _, a := range addrs {
-		d, found, err := store.Get(core.IPKey(a))
+		d, found, err := core.Get(ctx, store, core.IPKey(a))
 		if err != nil || !found {
 			t.Fatalf("Get(%s): found=%v err=%v", a, found, err)
 		}
@@ -166,10 +178,10 @@ func TestProcessAddresses(t *testing.T) {
 	// A second sighting increments pcount and refreshes the expiry while
 	// keeping the original first/pass times.
 	later := now.Add(10 * time.Minute)
-	if err := processAddresses(store, []string{"10.0.0.1"}, later, whiteExp, nil); err != nil {
+	if err := processAddresses(ctx, log, store, []string{"10.0.0.1"}, later, whiteExp, nil); err != nil {
 		t.Fatalf("processAddresses (second): %v", err)
 	}
-	d, found, err := store.Get(core.IPKey("10.0.0.1"))
+	d, found, err := core.Get(ctx, store, core.IPKey("10.0.0.1"))
 	if err != nil || !found {
 		t.Fatalf("Get after second call: found=%v err=%v", found, err)
 	}
@@ -186,11 +198,31 @@ func TestProcessAddresses(t *testing.T) {
 		t.Errorf("nil syncer must not be called; calls=%v", syncer.calls)
 	}
 
-	// No transaction may be left open.
-	if err := store.Begin(); err != nil {
-		t.Errorf("transaction left open: %v", err)
+	for _, want := range []string{"whitelisting ip=10.0.0.1", "whitelisting ip=192.168.1.2"} {
+		if !strings.Contains(logBuf.String(), want) {
+			t.Errorf("log output missing %q:\n%s", want, logBuf.String())
+		}
 	}
-	_ = store.Rollback()
+
+	// A failing update is reported, logged and rolled back: nothing is
+	// written and the syncer is not told.
+	ro := memory.New()
+	if err := ro.Open(ctx, core.OpenRO); err != nil {
+		t.Fatal(err)
+	}
+	logBuf.Reset()
+	if err := processAddresses(ctx, log, ro, []string{"10.0.0.9"}, now, whiteExp, syncer); err == nil {
+		t.Fatal("processAddresses on a read-only store succeeded, want error")
+	}
+	if _, found, err := core.Get(ctx, ro, core.IPKey("10.0.0.9")); err != nil || found {
+		t.Errorf("entry written despite failure: found=%v err=%v", found, err)
+	}
+	if len(syncer.calls) != 2 {
+		t.Errorf("syncer called for a failed update; calls=%v", syncer.calls)
+	}
+	if !strings.Contains(logBuf.String(), "error updating whitelist entry ip=10.0.0.9") {
+		t.Errorf("failure not logged:\n%s", logBuf.String())
+	}
 }
 
 // fakeFirewall hands out one batch of addresses and then blocks until the
@@ -204,12 +236,12 @@ type fakeFirewall struct {
 	closed   bool
 }
 
-func (f *fakeFirewall) Open() error  { return nil }
-func (f *fakeFirewall) Close() error { f.mu.Lock(); f.closed = true; f.mu.Unlock(); return nil }
-func (f *fakeFirewall) Replace(string, []string, core.Family) (int, error) {
+func (f *fakeFirewall) Open(context.Context) error { return nil }
+func (f *fakeFirewall) Close() error               { f.mu.Lock(); f.closed = true; f.mu.Unlock(); return nil }
+func (f *fakeFirewall) Replace(context.Context, string, []string, core.Family) (int, error) {
 	return 0, nil
 }
-func (f *fakeFirewall) StartLogCapture() error {
+func (f *fakeFirewall) StartLogCapture(context.Context) error {
 	f.mu.Lock()
 	f.started = true
 	f.mu.Unlock()
@@ -227,7 +259,7 @@ func (f *fakeFirewall) CaptureLog(ctx context.Context) ([]string, error) {
 	<-ctx.Done()
 	return nil, nil
 }
-func (f *fakeFirewall) LookupOrigDst(_, proxy netip.AddrPort) (netip.AddrPort, error) {
+func (f *fakeFirewall) LookupOrigDst(_ context.Context, _, proxy netip.AddrPort) (netip.AddrPort, error) {
 	return proxy, nil
 }
 
@@ -246,7 +278,7 @@ func TestRunEndToEnd(t *testing.T) {
 	t.Cleanup(func() { memory.Reset(dbName) })
 
 	fw := &fakeFirewall{addrs: []string{"1.2.3.4"}}
-	core.RegisterFirewall("fake", func(*config.Config) (core.Firewall, error) { return fw, nil })
+	core.RegisterFirewall("fake", func(*config.Config, core.FirewallOptions) (core.Firewall, error) { return fw, nil })
 
 	dir := t.TempDir()
 	pidfile := filepath.Join(dir, "greylogd.pid")
@@ -279,10 +311,11 @@ section database {
 	go func() { done <- Run([]string{"-f", conf}, &stderr) }()
 
 	// Wait until the captured address has been whitelisted.
+	ctx := context.Background()
 	view := memory.Open(dbName)
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		_, found, err := view.Get(core.IPKey("1.2.3.4"))
+		_, found, err := core.Get(ctx, view, core.IPKey("1.2.3.4"))
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
@@ -321,7 +354,7 @@ section database {
 		t.Errorf("pidfile still present after exit (err=%v)", err)
 	}
 
-	d, found, err := view.Get(core.IPKey("1.2.3.4"))
+	d, found, err := core.Get(ctx, view, core.IPKey("1.2.3.4"))
 	if err != nil || !found {
 		t.Fatalf("entry missing after run: found=%v err=%v", found, err)
 	}
@@ -336,7 +369,7 @@ section database {
 	}
 
 	out := stderr.String()
-	for _, want := range []string{"listening, in both directions", "whitelisting 1.2.3.4", "exiting"} {
+	for _, want := range []string{`listening direction="in both directions"`, "whitelisting ip=1.2.3.4", "exiting"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log output missing %q:\n%s", want, out)
 		}

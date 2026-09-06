@@ -1,4 +1,17 @@
 2026-09-06
+        Hardening and clean-up of the Go code base. New greyd.conf options,
+        all backwards compatible: config_socket (a unix domain socket for
+        greyd-setup, authorised by peer credentials instead of a reserved
+        source port), max_config_frame, max_cons_per_source, max_line_length,
+        grey.max_domains, setup.max_entries and sync.replay_window (replayed
+        sync packets are dropped; a missing sync key is now warned about).
+        greyd gained -t (test the configuration), --drivers and --version.
+        Unknown configuration variables are reported at start up. Internally
+        the programs share a typed configuration schema, structured logging,
+        transactional database and context-aware firewall interfaces, and a
+        hand-written codec for the internal message frames.
+
+2026-09-06
         greyd has been ported from C to Go. The four programs, their command
         line switches, the greyd.conf configuration files, the SMTP dialogue,
         the configuration connection wire protocol and the spamd-compatible

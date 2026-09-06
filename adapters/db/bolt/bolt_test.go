@@ -17,14 +17,19 @@
 package bolt
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/mikey-austin/greyd-golang/adapters/db/dbtest"
+	"github.com/mikey-austin/greyd-golang/adapters/db/kv"
 	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
 )
+
+var ctx = context.Background()
 
 func newConfig(dir string) *config.Config {
 	cfg := config.New()
@@ -44,14 +49,20 @@ func newStore(t *testing.T, dir string) core.Store {
 	return s
 }
 
+// openStore constructs and opens a store, closing it at the end of the test.
+func openStore(t *testing.T, dir string, mode core.OpenMode) core.Store {
+	t.Helper()
+	s := newStore(t, dir)
+	if err := s.Open(ctx, mode); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s
+}
+
 func TestConformance(t *testing.T) {
 	dbtest.RunConformance(t, func(t *testing.T) core.Store {
-		s := newStore(t, t.TempDir())
-		if err := s.Open(core.OpenRW); err != nil {
-			t.Fatalf("Open: %v", err)
-		}
-		t.Cleanup(func() { s.Close() })
-		return s
+		return openStore(t, t.TempDir(), core.OpenRW)
 	})
 }
 
@@ -88,13 +99,14 @@ func TestPersistence(t *testing.T) {
 	dir := t.TempDir()
 	want := core.Data{First: 1, Pass: 2, Expire: 3, BCount: 4, PCount: 5}
 	tuple := core.Tuple{IP: "1.2.3.4", Helo: "h", From: "f@x.org", To: "t@y.org"}
+	keys := []core.Key{core.IPKey("1.2.3.4"), core.TupleKey(tuple), core.MailKey("trap@x.org"), core.DomainKey("y.org")}
 
 	s := newStore(t, dir)
-	if err := s.Open(core.OpenRW); err != nil {
+	if err := s.Open(ctx, core.OpenRW); err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []core.Key{core.IPKey("1.2.3.4"), core.TupleKey(tuple), core.MailKey("trap@x.org"), core.DomainKey("y.org")} {
-		if err := s.Put(k, want); err != nil {
+	for _, k := range keys {
+		if err := core.Put(ctx, s, k, want); err != nil {
 			t.Fatalf("Put(%+v): %v", k, err)
 		}
 	}
@@ -102,18 +114,14 @@ func TestPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s2 := newStore(t, dir)
-	if err := s2.Open(core.OpenRW); err != nil {
-		t.Fatal(err)
-	}
-	defer s2.Close()
-	for _, k := range []core.Key{core.IPKey("1.2.3.4"), core.TupleKey(tuple), core.MailKey("trap@x.org"), core.DomainKey("y.org")} {
-		got, found, err := s2.Get(k)
+	s2 := openStore(t, dir, core.OpenRW)
+	for _, k := range keys {
+		got, found, err := core.Get(ctx, s2, k)
 		if err != nil || !found || got != want {
 			t.Fatalf("Get(%+v) after reopen = %+v %v %v", k, got, found, err)
 		}
 	}
-	if _, found, _ := s2.Get(core.DomainPartKey("r@sub.y.org")); !found {
+	if _, found, _ := core.Get(ctx, s2, core.DomainPartKey("r@sub.y.org")); !found {
 		t.Fatal("domain part lookup after reopen")
 	}
 }
@@ -121,61 +129,61 @@ func TestPersistence(t *testing.T) {
 func TestReadOnly(t *testing.T) {
 	dir := t.TempDir()
 	s := newStore(t, dir)
-	if err := s.Open(core.OpenRW); err != nil {
+	if err := s.Open(ctx, core.OpenRW); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put(core.IPKey("5.5.5.5"), core.Data{First: 7}); err != nil {
+	if err := core.Put(ctx, s, core.IPKey("5.5.5.5"), core.Data{First: 7}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	ro := newStore(t, dir)
-	if err := ro.Open(core.OpenRO); err != nil {
-		t.Fatalf("Open RO: %v", err)
-	}
-	defer ro.Close()
+	ro := openStore(t, dir, core.OpenRO)
 
-	d, found, err := ro.Get(core.IPKey("5.5.5.5"))
+	d, found, err := core.Get(ctx, ro, core.IPKey("5.5.5.5"))
 	if err != nil || !found || d.First != 7 {
 		t.Fatalf("Get in RO = %+v %v %v", d, found, err)
 	}
-	if err := ro.Put(core.IPKey("6.6.6.6"), core.Data{}); err == nil {
-		t.Fatal("Put on a read-only store must fail")
+	if err := core.Put(ctx, ro, core.IPKey("6.6.6.6"), core.Data{}); !errors.Is(err, core.ErrReadOnly) {
+		t.Fatalf("Put on a read-only store = %v, want ErrReadOnly", err)
 	}
-	if _, err := ro.Del(core.IPKey("5.5.5.5")); err == nil {
-		t.Fatal("Del on a read-only store must fail")
+	if _, err := core.Del(ctx, ro, core.IPKey("5.5.5.5")); !errors.Is(err, core.ErrReadOnly) {
+		t.Fatalf("Del on a read-only store = %v, want ErrReadOnly", err)
+	}
+	called := false
+	err = ro.Update(ctx, func(core.Tx) error {
+		called = true
+		return nil
+	})
+	if !errors.Is(err, core.ErrReadOnly) {
+		t.Fatalf("Update on a read-only store = %v, want ErrReadOnly", err)
+	}
+	if called {
+		t.Fatal("Update must not run fn on a read-only store")
 	}
 
-	// An explicit transaction is a read transaction: reads work, writes
-	// fail and Commit releases it.
-	if err := ro.Begin(); err != nil {
-		t.Fatalf("Begin RO: %v", err)
+	// Reads and iteration work in a read transaction.
+	err = ro.View(ctx, func(tx core.ReadTx) error {
+		if _, found, err := tx.Get(core.IPKey("5.5.5.5")); err != nil || !found {
+			t.Fatalf("Get in RO tx = %v %v", found, err)
+		}
+		if n := countEntries(t, tx); n != 1 {
+			t.Fatalf("RO iteration count = %d", n)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("View RO: %v", err)
 	}
-	if _, found, err := ro.Get(core.IPKey("5.5.5.5")); err != nil || !found {
-		t.Fatalf("Get in RO tx = %v %v", found, err)
-	}
-	if err := ro.Put(core.IPKey("6.6.6.6"), core.Data{}); err == nil {
-		t.Fatal("Put in a read-only transaction must fail")
-	}
-	if n := countEntries(t, ro); n != 1 {
-		t.Fatalf("RO iteration count = %d", n)
-	}
-	if err := ro.Commit(); err != nil {
-		t.Fatalf("Commit RO: %v", err)
-	}
-	if err := ro.Commit(); err != core.ErrNotInTransaction {
-		t.Fatalf("second Commit = %v", err)
-	}
-	if _, found, _ := ro.Get(core.IPKey("6.6.6.6")); found {
+	if _, found, _ := core.Get(ctx, ro, core.IPKey("6.6.6.6")); found {
 		t.Fatal("rejected write must not be visible")
 	}
 }
 
 func TestOpenReadOnlyMissingFile(t *testing.T) {
 	s := newStore(t, t.TempDir())
-	if err := s.Open(core.OpenRO); err == nil {
+	if err := s.Open(ctx, core.OpenRO); err == nil {
 		s.Close()
 		t.Fatal("read-only open of a missing file should fail")
 	}
@@ -183,45 +191,91 @@ func TestOpenReadOnlyMissingFile(t *testing.T) {
 
 func TestUnopenedStore(t *testing.T) {
 	s := newStore(t, t.TempDir())
-	if err := s.Put(core.IPKey("1.1.1.1"), core.Data{}); err == nil {
-		t.Fatal("Put before Open must fail")
+	if err := core.Put(ctx, s, core.IPKey("1.1.1.1"), core.Data{}); !errors.Is(err, core.ErrNotOpen) {
+		t.Fatalf("Put before Open = %v, want ErrNotOpen", err)
 	}
-	if err := s.Begin(); err == nil {
-		t.Fatal("Begin before Open must fail")
+	if err := s.View(ctx, func(core.ReadTx) error { return nil }); !errors.Is(err, core.ErrNotOpen) {
+		t.Fatalf("View before Open = %v, want ErrNotOpen", err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close of an unopened store: %v", err)
 	}
 }
 
-func TestCloseRollsBackTransaction(t *testing.T) {
+func TestOpenCancelledContext(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	s := newStore(t, t.TempDir())
+	if err := s.Open(cancelled, core.OpenRW); !errors.Is(err, context.Canceled) {
+		s.Close()
+		t.Fatalf("Open with cancelled context = %v", err)
+	}
+}
+
+func TestIteratorNoCurrent(t *testing.T) {
+	s := openStore(t, t.TempDir(), core.OpenRW)
+	if err := core.Put(ctx, s, core.IPKey("1.1.1.1"), core.Data{}); err != nil {
+		t.Fatal(err)
+	}
+	err := s.Update(ctx, func(tx core.Tx) error {
+		it, err := tx.Iter(core.IterEntries)
+		if err != nil {
+			return err
+		}
+		defer it.Close()
+		if err := it.DeleteCurrent(); !errors.Is(err, kv.ErrNoCurrent) {
+			t.Fatalf("DeleteCurrent before Next = %v", err)
+		}
+		if err := it.ReplaceCurrent(core.Data{}); !errors.Is(err, kv.ErrNoCurrent) {
+			t.Fatalf("ReplaceCurrent before Next = %v", err)
+		}
+		for {
+			if _, _, ok, err := it.Next(); err != nil || !ok {
+				break
+			}
+		}
+		if err := it.DeleteCurrent(); !errors.Is(err, kv.ErrNoCurrent) {
+			t.Fatalf("DeleteCurrent after the end = %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := core.Get(ctx, s, core.IPKey("1.1.1.1")); !found {
+		t.Fatal("entry must survive")
+	}
+}
+
+func TestCloseDiscardsNothingCommitted(t *testing.T) {
+	// A failed Update leaves no trace on disk after a reopen.
 	dir := t.TempDir()
 	s := newStore(t, dir)
-	if err := s.Open(core.OpenRW); err != nil {
+	if err := s.Open(ctx, core.OpenRW); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Begin(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Put(core.IPKey("9.9.9.9"), core.Data{}); err != nil {
-		t.Fatal(err)
+	boom := errors.New("boom")
+	err := s.Update(ctx, func(tx core.Tx) error {
+		if err := tx.Put(core.IPKey("9.9.9.9"), core.Data{}); err != nil {
+			return err
+		}
+		return boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("Update = %v", err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	s2 := newStore(t, dir)
-	if err := s2.Open(core.OpenRW); err != nil {
-		t.Fatal(err)
-	}
-	defer s2.Close()
-	if _, found, _ := s2.Get(core.IPKey("9.9.9.9")); found {
-		t.Fatal("uncommitted write survived Close")
+	s2 := openStore(t, dir, core.OpenRW)
+	if _, found, _ := core.Get(ctx, s2, core.IPKey("9.9.9.9")); found {
+		t.Fatal("rolled back write survived Close")
 	}
 }
 
-func countEntries(t *testing.T, s core.Store) int {
+func countEntries(t *testing.T, tx core.ReadTx) int {
 	t.Helper()
-	it, err := s.Iter(core.IterAll)
+	it, err := tx.Iter(core.IterAll)
 	if err != nil {
 		t.Fatal(err)
 	}

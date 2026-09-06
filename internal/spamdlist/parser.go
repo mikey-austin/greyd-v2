@@ -17,6 +17,7 @@
 package spamdlist
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -41,25 +42,41 @@ func (e *Error) Error() string {
 //	address   : number . number . number . number ;
 //	number    : INT6 | INT8 ;
 type parser struct {
-	s    *Scanner
-	curr Token
-	bl   *blacklist.Blacklist
-	typ  blacklist.Type
+	s     *Scanner
+	curr  Token
+	bl    *blacklist.Blacklist
+	typ   blacklist.Type
+	limit int
+	count int
 }
+
+// ErrTooManyEntries is returned when a list exceeds the entry limit given
+// to ParseLimited; entries up to the limit are kept.
+var ErrTooManyEntries = errors.New("too many entries in list")
 
 // Parse reads the list from r and adds every entry as a range of the given
 // type to bl. Entries preceding a syntax error are kept.
 func Parse(r io.Reader, bl *blacklist.Blacklist, t blacklist.Type) error {
-	p := &parser{s: NewScanner(r), bl: bl, typ: t}
+	return ParseLimited(r, bl, t, 0)
+}
+
+// ParseLimited is Parse with a cap on the number of entries accepted
+// (0 = unlimited), bounding memory use on a hostile feed.
+func ParseLimited(r io.Reader, bl *blacklist.Blacklist, t blacklist.Type, maxEntries int) error {
+	p := &parser{s: NewScanner(r), bl: bl, typ: t, limit: maxEntries}
 	p.advance()
 	p.accept(TokEOL)
 	if p.curr.Kind == TokEOF {
 		return nil
 	}
 	for {
+		if p.limit > 0 && p.count >= p.limit {
+			return ErrTooManyEntries
+		}
 		if err := p.entry(); err != nil {
 			return err
 		}
+		p.count++
 		if !p.accept(TokEOL) {
 			if p.curr.Kind == TokEOF {
 				return nil

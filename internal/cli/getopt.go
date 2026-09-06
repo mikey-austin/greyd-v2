@@ -41,7 +41,7 @@ var ErrUsage = errors.New("usage")
 type UnknownOptionError struct{ Flag byte }
 
 func (e *UnknownOptionError) Error() string { return fmt.Sprintf("invalid option -- '%c'", e.Flag) }
-func (e *UnknownOptionError) Unwrap() error  { return ErrUsage }
+func (e *UnknownOptionError) Unwrap() error { return ErrUsage }
 
 // MissingArgError reports an option given without its argument.
 type MissingArgError struct{ Flag byte }

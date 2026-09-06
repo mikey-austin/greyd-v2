@@ -19,8 +19,10 @@
 package setup
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"syscall"
@@ -30,6 +32,7 @@ import (
 	"github.com/mikey-austin/greyd-golang/internal/core"
 	"github.com/mikey-austin/greyd-golang/internal/ipc"
 	"github.com/mikey-austin/greyd-golang/internal/logger"
+	"github.com/mikey-austin/greyd-golang/internal/settings"
 	"github.com/mikey-austin/greyd-golang/internal/spamdlist"
 )
 
@@ -52,6 +55,8 @@ type Options struct {
 	GreyOnly bool
 	// Debugf receives debug output; defaults to stderr.
 	Debugf func(format string, a ...any)
+	// Log receives warnings; nil discards them.
+	Log *slog.Logger
 }
 
 // Dialer opens a configuration connection to greyd.
@@ -63,17 +68,18 @@ type Dialer func() (net.Conn, error)
 // collapsed and sent over a fresh connection from dial; when GreyOnly is
 // false every CIDR is also loaded into the greyd-blacklist firewall set
 // once the final list has been processed.
-func Run(cfg *config.Config, o Options, fw core.Firewall, dial Dialer) error {
+func Run(ctx context.Context, s *settings.Settings, o Options, fw core.Firewall, dial Dialer) error {
+	log := logger.Or(o.Log)
 	if o.Debugf == nil {
 		o.Debugf = func(format string, a ...any) { fmt.Fprintf(os.Stderr, format, a...) }
 	}
 
-	lists := cfg.StrList("lists", "setup")
+	lists := s.Setup.Lists
 	if len(lists) == 0 {
 		return errors.New("no lists configured")
 	}
 
-	r := &runner{cfg: cfg, o: o, fw: fw, dial: dial}
+	r := &runner{ctx: ctx, o: o, fw: fw, dial: dial, log: log}
 	var current *blacklist.Blacklist
 
 	for _, name := range lists {
@@ -81,7 +87,7 @@ func Run(cfg *config.Config, o Options, fw core.Firewall, dial Dialer) error {
 			section *config.Section
 			bltype  blacklist.Type
 		)
-		if section = cfg.Blacklist(name); section != nil {
+		if section = s.Blacklists[name]; section != nil {
 			if current != nil && !o.Dryrun {
 				if err := r.send(current, false); err != nil {
 					return err
@@ -89,27 +95,26 @@ func Run(cfg *config.Config, o Options, fw core.Firewall, dial Dialer) error {
 			}
 			current = blacklist.New(name, section.Str("message", DefaultMessage), blacklist.StorageList)
 			bltype = blacklist.TypeBlack
-		} else if section = cfg.Whitelist(name); section != nil && current != nil {
+		} else if section = s.Whitelists[name]; section != nil && current != nil {
 			bltype = blacklist.TypeWhite
 		} else {
 			continue
 		}
 
-		src, err := Open(section, cfg)
+		src, err := Open(section, s.Setup)
 		if err != nil {
-			logger.Warning("%v", err)
-			logger.Warning("Ignoring list %s", name)
+			log.Warn("ignoring list", "list", name, "err", err)
 			continue
 		}
 
 		count := current.Count
-		err = spamdlist.Parse(src, current, bltype)
+		err = spamdlist.ParseLimited(src, current, bltype, s.Setup.MaxEntries)
 		src.Close()
 		var perr *spamdlist.Error
 		if errors.As(err, &perr) {
-			logger.Warning("blacklist parse error processing %s, line %d col %d", name, perr.Line, perr.Col)
+			log.Warn("blacklist parse error", "list", name, "line", perr.Line, "col", perr.Col)
 		} else if err != nil {
-			logger.Warning("blacklist parse error processing %s: %v", name, err)
+			log.Warn("blacklist parse error", "list", name, "err", err)
 		}
 
 		if o.Debug {
@@ -129,7 +134,8 @@ func Run(cfg *config.Config, o Options, fw core.Firewall, dial Dialer) error {
 
 // runner carries the state shared between send calls.
 type runner struct {
-	cfg      *config.Config
+	ctx      context.Context
+	log      *slog.Logger
 	o        Options
 	fw       core.Firewall
 	dial     Dialer
@@ -148,7 +154,7 @@ func (r *runner) send(bl *blacklist.Blacklist, final bool) error {
 			if r.fw == nil {
 				return errors.New("Could not configure firewall")
 			}
-			n, err := r.fw.Replace(FirewallSet, r.allCidrs, core.IPv4)
+			n, err := r.fw.Replace(r.ctx, FirewallSet, r.allCidrs, core.IPv4)
 			if err != nil {
 				return fmt.Errorf("Could not configure firewall: %w", err)
 			}
@@ -196,6 +202,12 @@ func DialReserved(port int) (net.Conn, error) {
 func isBindError(err error) bool {
 	return errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) ||
 		errors.Is(err, syscall.EADDRINUSE) || errors.Is(err, syscall.EADDRNOTAVAIL)
+}
+
+// DialUnix connects to greyd's configuration socket when config_socket is
+// set; greyd checks the peer credentials instead of the source port.
+func DialUnix(path string) (net.Conn, error) {
+	return net.Dial("unix", path)
 }
 
 // DialAny connects to greyd's configuration port on the loopback

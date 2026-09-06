@@ -21,6 +21,8 @@
 package memory
 
 import (
+	"context"
+	"maps"
 	"sort"
 	"sync"
 
@@ -38,10 +40,13 @@ func init() {
 	})
 }
 
-// database is the shared state behind stores of the same name.
+type buckets map[kv.Bucket]map[string][]byte
+
+// database is the shared state behind stores of the same name. One
+// transaction runs at a time.
 type database struct {
-	mu      sync.Mutex
-	buckets map[kv.Bucket]map[string][]byte
+	mu   sync.Mutex
+	data buckets
 }
 
 var (
@@ -61,11 +66,19 @@ func lookupDB(name string) *database {
 }
 
 func newDatabase() *database {
-	return &database{buckets: map[kv.Bucket]map[string][]byte{
+	return &database{data: buckets{
 		kv.BucketEntries:   {},
 		kv.BucketSpamtraps: {},
 		kv.BucketDomains:   {},
 	}}
+}
+
+func (b buckets) clone() buckets {
+	c := make(buckets, len(b))
+	for k, m := range b {
+		c[k] = maps.Clone(m)
+	}
+	return c
 }
 
 // Reset drops all data of the named database (tests).
@@ -78,76 +91,68 @@ func Reset(name string) {
 // Store is a handle onto a named in-memory database.
 type Store struct {
 	db       *database
-	inTxn    bool
-	snapshot map[kv.Bucket]map[string][]byte
+	readOnly bool
 }
 
 // Open returns a handle onto the named database.
-func Open(name string) *Store {
-	return &Store{db: lookupDB(name)}
-}
+func Open(name string) *Store { return &Store{db: lookupDB(name)} }
 
 // New returns a handle onto a private, unnamed database.
-func New() *Store {
-	return &Store{db: newDatabase()}
-}
+func New() *Store { return &Store{db: newDatabase()} }
 
-func (s *Store) Open(core.OpenMode) error { return nil }
-func (s *Store) Close() error             { return nil }
-
-func (s *Store) Begin() error {
-	s.db.mu.Lock()
-	defer s.db.mu.Unlock()
-	if s.inTxn {
-		return core.ErrInTransaction
-	}
-	s.snapshot = make(map[kv.Bucket]map[string][]byte, len(s.db.buckets))
-	for b, m := range s.db.buckets {
-		c := make(map[string][]byte, len(m))
-		for k, v := range m {
-			c[k] = v
-		}
-		s.snapshot[b] = c
-	}
-	s.inTxn = true
+func (s *Store) Open(_ context.Context, mode core.OpenMode) error {
+	s.readOnly = mode == core.OpenRO
 	return nil
 }
 
-func (s *Store) Commit() error {
-	s.db.mu.Lock()
-	defer s.db.mu.Unlock()
-	if !s.inTxn {
-		return core.ErrNotInTransaction
+func (s *Store) Close() error { return nil }
+
+// View runs fn against a consistent view of the data.
+func (s *Store) View(ctx context.Context, fn func(core.ReadTx) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	s.inTxn = false
-	s.snapshot = nil
-	return nil
-}
-
-func (s *Store) Rollback() error {
 	s.db.mu.Lock()
 	defer s.db.mu.Unlock()
-	if !s.inTxn {
-		return core.ErrNotInTransaction
+	return fn(&tx{data: s.db.data, readOnly: true})
+}
+
+// Update runs fn against the data and keeps the changes only when fn
+// returns nil.
+func (s *Store) Update(ctx context.Context, fn func(core.Tx) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	s.db.buckets = s.snapshot
-	s.inTxn = false
-	s.snapshot = nil
+	if s.readOnly {
+		return core.ErrReadOnly
+	}
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+	work := s.db.data.clone()
+	if err := fn(&tx{data: work}); err != nil {
+		return err
+	}
+	s.db.data = work
 	return nil
 }
 
-func (s *Store) Put(k core.Key, d core.Data) error {
-	s.db.mu.Lock()
-	defer s.db.mu.Unlock()
-	s.db.buckets[kv.BucketFor(k.Type)][string(kv.EncodeKey(k))] = kv.EncodeData(d)
+// tx implements core.Tx over a bucket set.
+type tx struct {
+	data     buckets
+	readOnly bool
+}
+
+func (t *tx) Put(k core.Key, d core.Data) error {
+	if t.readOnly {
+		return core.ErrReadOnly
+	}
+	t.data[kv.BucketFor(k.Type)][string(kv.EncodeKey(k))] = kv.EncodeData(d)
 	return nil
 }
 
-func (s *Store) Get(k core.Key) (core.Data, bool, error) {
-	s.db.mu.Lock()
-	defer s.db.mu.Unlock()
+func (t *tx) Get(k core.Key) (core.Data, bool, error) {
 	if k.Type == core.KeyDomainPart {
-		for raw := range s.db.buckets[kv.BucketDomains] {
+		for raw := range t.data[kv.BucketDomains] {
 			dk, err := kv.DecodeKey([]byte(raw))
 			if err != nil {
 				return core.Data{}, false, err
@@ -158,7 +163,7 @@ func (s *Store) Get(k core.Key) (core.Data, bool, error) {
 		}
 		return core.Data{}, false, nil
 	}
-	v, ok := s.db.buckets[kv.BucketFor(k.Type)][string(kv.EncodeKey(k))]
+	v, ok := t.data[kv.BucketFor(k.Type)][string(kv.EncodeKey(k))]
 	if !ok {
 		return core.Data{}, false, nil
 	}
@@ -166,10 +171,11 @@ func (s *Store) Get(k core.Key) (core.Data, bool, error) {
 	return d, err == nil, err
 }
 
-func (s *Store) Del(k core.Key) (bool, error) {
-	s.db.mu.Lock()
-	defer s.db.mu.Unlock()
-	b := s.db.buckets[kv.BucketFor(k.Type)]
+func (t *tx) Del(k core.Key) (bool, error) {
+	if t.readOnly {
+		return false, core.ErrReadOnly
+	}
+	b := t.data[kv.BucketFor(k.Type)]
 	ek := string(kv.EncodeKey(k))
 	if _, ok := b[ek]; !ok {
 		return false, nil
@@ -178,10 +184,8 @@ func (s *Store) Del(k core.Key) (bool, error) {
 	return true, nil
 }
 
-func (s *Store) Iter(types core.IterTypes) (core.Iterator, error) {
-	s.db.mu.Lock()
-	defer s.db.mu.Unlock()
-	it := &iterator{s: s}
+func (t *tx) Iter(types core.IterTypes) (core.Iterator, error) {
+	it := &iterator{t: t, pos: -1}
 	for _, b := range []struct {
 		t core.IterTypes
 		b kv.Bucket
@@ -189,23 +193,25 @@ func (s *Store) Iter(types core.IterTypes) (core.Iterator, error) {
 		if types&b.t == 0 {
 			continue
 		}
-		keys := make([]string, 0, len(s.db.buckets[b.b]))
-		for k := range s.db.buckets[b.b] {
+		keys := make([]string, 0, len(t.data[b.b]))
+		for k := range t.data[b.b] {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
 		it.keys = append(it.keys, keys...)
 	}
-	it.pos = -1
 	return it, nil
 }
 
-func (s *Store) Scan(now, whiteExp int64) (core.ScanResult, error) {
-	return kv.Scan(s, now, whiteExp)
+func (t *tx) Scan(now, whiteExp int64) (core.ScanResult, error) {
+	if t.readOnly {
+		return core.ScanResult{}, core.ErrReadOnly
+	}
+	return kv.Scan(t, now, whiteExp)
 }
 
 type iterator struct {
-	s    *Store
+	t    *tx
 	keys []string
 	pos  int
 	curr core.Key
@@ -213,8 +219,6 @@ type iterator struct {
 }
 
 func (it *iterator) Next() (core.Key, core.Data, bool, error) {
-	it.s.db.mu.Lock()
-	defer it.s.db.mu.Unlock()
 	for {
 		it.pos++
 		if it.pos >= len(it.keys) {
@@ -225,7 +229,7 @@ func (it *iterator) Next() (core.Key, core.Data, bool, error) {
 		if err != nil {
 			return core.Key{}, core.Data{}, false, err
 		}
-		v, ok := it.s.db.buckets[kv.BucketFor(k.Type)][it.keys[it.pos]]
+		v, ok := it.t.data[kv.BucketFor(k.Type)][it.keys[it.pos]]
 		if !ok {
 			continue // deleted since the snapshot was taken
 		}
@@ -241,16 +245,16 @@ func (it *iterator) Next() (core.Key, core.Data, bool, error) {
 
 func (it *iterator) ReplaceCurrent(d core.Data) error {
 	if !it.has {
-		return core.ErrNotInTransaction
+		return kv.ErrNoCurrent
 	}
-	return it.s.Put(it.curr, d)
+	return it.t.Put(it.curr, d)
 }
 
 func (it *iterator) DeleteCurrent() error {
 	if !it.has {
-		return core.ErrNotInTransaction
+		return kv.ErrNoCurrent
 	}
-	_, err := it.s.Del(it.curr)
+	_, err := it.t.Del(it.curr)
 	return err
 }
 

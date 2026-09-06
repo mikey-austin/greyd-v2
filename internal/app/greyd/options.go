@@ -35,7 +35,7 @@ import (
 const Usage = "usage: greyd [-f config] [-45bdvF] [-B maxblack] [-c maxcon] [-G passtime:greyexp:whiteexp]\n" +
 	"\t[-h hostname] [-l address] [-M address] [-n name] [-p port]\n" +
 	"\t[-P pidfile] [-S secs] [-s secs] [-L ipv6 address]\n" +
-	"\t[-w window] [-Y synctarget] [-y synclisten]\n"
+	"\t[-w window] [-Y synctarget] [-y synclisten] [-t] [--drivers] [--version]\n"
 
 // ErrUsage signals a command line error; the caller prints Usage.
 var ErrUsage = errors.New("usage")
@@ -49,15 +49,34 @@ type Options struct {
 	SyncRecv int
 	// Hostname is set by -h.
 	Hostname string
+	// TestConfig (-t) checks the configuration and exits.
+	TestConfig bool
+	// ListDrivers (--drivers) prints the compiled-in drivers and exits.
+	ListDrivers bool
+	// ShowVersion (--version) prints the version and exits.
+	ShowVersion bool
 }
 
 // optString lists the switches (getopt "F456f:l:L:c:B:p:bdG:h:s:S:M:n:vw:y:Y:P:").
-const optString = "F456f:l:L:c:B:p:bdG:h:s:S:M:n:vw:y:Y:P:"
+const optString = "F456f:l:L:c:B:p:bdG:h:s:S:M:n:vw:y:Y:P:t"
 
-// ParseFlags parses the switches. maxFiles bounds -B and -c.
+// ParseFlags parses the switches. maxFiles bounds -B and -c. The long
+// options --drivers and --version are informational and take no
+// argument.
 func ParseFlags(args []string, maxFiles int) (Options, error) {
 	o := Options{ConfigFile: version.DefaultConfig, Opts: config.New()}
-	opts, rest, err := cli.Parse(optString, args)
+	var short []string
+	for _, a := range args {
+		switch a {
+		case "--drivers":
+			o.ListDrivers = true
+		case "--version":
+			o.ShowVersion = true
+		default:
+			short = append(short, a)
+		}
+	}
+	opts, rest, err := cli.Parse(optString, short)
 	if err != nil {
 		return o, ErrUsage
 	}
@@ -124,6 +143,8 @@ func (o *Options) apply(c byte, arg string, maxFiles int) error {
 		opts.SetStr("greyd_pidfile", "", arg)
 	case 'd':
 		opts.SetInt("debug", "", 1)
+	case 't':
+		o.TestConfig = true
 	case 'b':
 		opts.SetInt("enable", "grey", 0)
 	case 'G':

@@ -3,7 +3,7 @@ greyd(8) -- spam deferral daemon
 
 ## SYNOPSIS
 
-`greyd` [**-456bdvF**] [**-f** config] [**-B** maxblack] [**-c** maxcon] [**-G** passtime:greyexp:whiteexp] [**-h** hostname] [**-l** address] [**-L** address] [**-M** address] [**-n** name] [**-p** port] [**-P** pidfile] [**-S** secs] [**-s** secs] [**-w** window] [**-Y** synctarget] [**-y** synclisten]
+`greyd` [**-456bdvF**] [**-f** config] [**-B** maxblack] [**-c** maxcon] [**-G** passtime:greyexp:whiteexp] [**-h** hostname] [**-l** address] [**-L** address] [**-M** address] [**-n** name] [**-p** port] [**-P** pidfile] [**-S** secs] [**-s** secs] [**-w** window] [**-Y** synctarget] [**-y** synclisten] [**-t**] [**--drivers**] [**--version**]
 
 ## DESCRIPTION
 
@@ -91,6 +91,15 @@ Add target *synctarget* to receive synchronisation messages. synctarget can be e
 
 * **-y** *synclisten*:
 Listen on *synclisten* network interface for incoming synchronisation messages. This option can be specified only once. See also [SYNCHRONISATION][] below.
+
+* **-t**:
+Test the configuration: load **greyd.conf**(5) together with the other switches, print any warnings (such as unknown variables) and whether the configured drivers are available, then exit. The exit status is non-zero when the configuration is not usable.
+
+* **--drivers**:
+Print the compiled-in database and firewall drivers and exit.
+
+* **--version**:
+Print the version and exit.
 
 When run in default mode, connections receive the pleasantly innocuous temporary failure of:
 
@@ -201,7 +210,7 @@ Addresses can be loaded into the table with the *ipset* command (consult the *ip
 
 ## CONFIGURATION CONNECTIONS
 
-**greyd** listens for configuration connections on port 8026 by default, which can be overridden by setting the *config_port* configuration option. The configuration socket listens only on the INADDR_LOOPBACK address. Configuration of **greyd** is done by connecting to the configuration socket, and sending blacklist information. Each blacklist consists of a name, a message to reject mail with, and addresses in CIDR format. This information is specified in the **greyd.conf** format, with entries terminated by '%%'. For example:
+**greyd** listens for configuration connections on port 8026 by default, which can be overridden by setting the *config_port* configuration option. The configuration socket listens only on the INADDR_LOOPBACK address and only accepts connections from a reserved (privileged) source port. Alternatively, setting *config_socket* makes **greyd** listen on a unix domain socket instead; it is created mode 0600 and connections are accepted only from the super user and from the user **greyd** runs as, verified through the peer credentials. Blacklists larger than *max_config_frame* bytes are rejected. Configuration of **greyd** is done by connecting to the configuration socket, and sending blacklist information. Each blacklist consists of a name, a message to reject mail with, and addresses in CIDR format. This information is specified in the **greyd.conf** format, with entries terminated by '%%'. For example:
 
     name = "greyd-blacklist
     message = "Your IP address %A has been blocked by \\\\nour blacklist"
