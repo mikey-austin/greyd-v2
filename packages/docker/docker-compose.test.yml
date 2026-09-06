@@ -1,0 +1,40 @@
+# Throw-away databases for the mysql and postgresql driver tests.
+#
+#   make test-db-docker
+#
+# or by hand:
+#
+#   docker compose -f packages/docker/docker-compose.test.yml up -d --wait
+#   GREYD_TEST_MYSQL_DSN='greyd:greyd@tcp(127.0.0.1:13306)/greyd' \
+#   GREYD_TEST_POSTGRESQL_DSN='postgres://greyd:greyd@127.0.0.1:15432/greyd?sslmode=disable' \
+#       go test -count=1 ./adapters/db/mysql/ ./adapters/db/postgresql/
+#   docker compose -f packages/docker/docker-compose.test.yml down -v
+services:
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_DATABASE: greyd
+      MYSQL_USER: greyd
+      MYSQL_PASSWORD: greyd
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "13306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  postgresql:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: greyd
+      POSTGRES_USER: greyd
+      POSTGRES_PASSWORD: greyd
+    ports:
+      - "15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U greyd -d greyd"]
+      interval: 2s
+      timeout: 5s
+      retries: 60

@@ -1,0 +1,129 @@
+2026-09-06  Mikey Austin  <mikey@greyd.org>
+
+	* Ported the whole code base from C to Go. The programs (greyd, greydb,
+	  greyd-setup, greylogd), their command line switches, the greyd.conf
+	  configuration files, the SMTP dialogue, the configuration connection
+	  wire protocol and the spamd-compatible sync protocol are unchanged.
+	* Drivers are now selected by name (driver = "netfilter", "sqlite", ...)
+	  instead of by shared object path; legacy paths are still accepted.
+	* Replaced the Berkeley DB & Berkeley DB SQL drivers with the new bolt
+	  driver (embedded pure Go key/value store). Existing BDB files are
+	  not migrated; the database is rebuilt.
+	* SPF support and all database & firewall drivers are always built in;
+	  the --with-* configure switches are gone along with autotools.
+	* The netfilter driver now talks to the kernel directly over netlink
+	  (ipset, conntrack and NFLOG) instead of the libnetfilter libraries.
+	* New in-process memory database driver for testing and containers.
+
+2020-01-25  Mikey Austin  <mikey@greyd.org>
+
+	* Improved file logging module
+	* Updated logger to always write to stderr
+
+2020-01-24  Mikey Austin  <mikey@greyd.org>
+
+	* Added new log_to_file configuration
+
+2020-01-23  Mikey Austin  <mikey@greyd.org>
+
+	* Fix bug in proxy initialization
+	* Added container support
+
+2020-01-01  Mikey Austin  <mikey@greyd.org>
+
+	* Fix bug in sync module hmac ctx cleanup
+	* Added new -F (foreground) option to greyd
+
+2020-01-01  Mikey Austin  <mikey@greyd.org>
+
+	* Updated sync module to work with earlier < 1.1 versions of openssl
+
+2019-12-30  Mikey Austin  <mikey@greyd.org>
+
+	* Updated netfilter driver to work with the latest ipset 7+
+
+2019-12-30  Mikey Austin  <mikey@greyd.org>
+
+	* New proxy protocol support
+
+2015-06-26  Mikey Austin  <mikey@greyd.org>
+
+	* Fixed race between grey & main processes with the fw pipe
+
+2015-06-22  Mikey Austin  <mikey@greyd.org>
+
+	* Added configuration options/docs for max_cons & max_cons_black
+	* Decoupled setrlimit from debug config option
+
+2015-06-08  Mikey Austin  <mikey@greyd.org>
+
+	* Added proxy support to greyd-setup
+	* Added spamd sync compatability
+	* Extended sync to sync white/trap deletions via greydb
+	* Fixed bugs in netfilter & sqlite drivers
+	* Bumped sync protocol version to 2 (incompatible with previous releases)
+	* Modified sqlite driver to auto retry commits & begins when db is busy
+
+2015-05-10  Mikey Austin  <mikey@greyd.org>
+
+	* New blacklist PATRICIA trie storage for fast lookups
+	* New BDB SQL, SQLite & MySQL storage drivers
+	* Updated documentation for new drivers
+	* Bug fixes.
+
+2015-03-12  Mikey Austin  <mikey@greyd.org>
+
+	* Hash performance tuning.
+	* Added --with-ltdl-fix for distros with broken libltdl (credit to Ivan Agarkov (kreon))
+	* Updated sync slave debug messages to be less chatty
+
+2015-03-08  Mikey Austin  <mikey@greyd.org>
+
+	* Minor internal refactoring & cleanups.
+	* Cleanup the test framework and added support for unit testing through valgrind.
+	* Added RPM packaging capabilities to build system.
+	* Added RHEL-based init scripts.
+	* Minor bug fixes & updates to default configuration file.
+
+2015-02-06  Mikey Austin  <mikey@greyd.org>
+
+	* Minor documentation fixes & updates.
+
+2015-02-01  Mikey Austin  <mikey@greyd.org>
+
+	* Added new SPF validation functionality.
+	* Fixed some minor bugs.
+
+2015-01-28  Mikey Austin  <mikey@greyd.org>
+
+	* Added greyd_pidfile & greylogd_pidfile functionality
+	* Added support for DragonFly BSD.
+
+2015-01-24  Mikey Austin  <mikey@greyd.org>
+
+	* Fixed issues with sending sync messages.
+	* Fixed issue with firewall process not terminating at shutdown.
+	* Added support for NetBSD.
+	* Added support for FreeBSD.
+
+2015-01-19  Mikey Austin  <mikey@greyd.org>
+
+	* Refactored internal firewall access between greyd processes.
+
+2015-01-10  Mikey Austin  <mikey@greyd.org>
+
+	* Bug fixes in sync engine
+	* Consistent default config path handling
+
+2015-01-08  Mikey Austin  <mikey@greyd.org>
+
+	* Minor bug fix in netfilter driver preventing greylogd from operating.
+
+2015-01-07  Mikey Austin  <mikey@greyd.org>
+
+	* New PF firewall driver and OpenBSD portability changes.
+	* Small bug fixes in error reporting for useability.
+
+2015-01-01  Mikey Austin  <mikey@greyd.org>
+
+	* Initial development release of greyd.

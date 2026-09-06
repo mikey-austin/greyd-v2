@@ -24,6 +24,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/antlr4-go/antlr/v4"
 
@@ -45,6 +46,10 @@ func (e *Error) Error() string {
 func init() {
 	config.Parser = Into
 }
+
+// parseMu serialises parses: the ANTLR runtime shares adaptive prediction
+// state between parser instances and is not safe for concurrent use.
+var parseMu sync.Mutex
 
 // errorListener records the first syntax error.
 type errorListener struct {
@@ -81,6 +86,9 @@ func Reader(r io.Reader) (*config.Config, error) {
 // A section, blacklist or whitelist definition replaces any existing one
 // of the same name, matching the behaviour of the C parser.
 func Into(cfg *config.Config, src string) error {
+	parseMu.Lock()
+	defer parseMu.Unlock()
+
 	el := &errorListener{DefaultErrorListener: antlr.NewDefaultErrorListener()}
 
 	input := antlr.NewInputStream(src)

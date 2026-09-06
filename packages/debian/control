@@ -1,0 +1,15 @@
+Source: greyd
+Section: mail
+Priority: extra
+Maintainer: Steve Head <steve@ayudahosting.com.au>
+Build-Depends: debhelper (>= 8.0.0), golang-go (>= 2:1.25~), make
+Standards-Version: 3.9.3
+Homepage: http://greyd.org/
+#Vcs-Git: git://git.debian.org/collab-maint/greyd.git
+#Vcs-Browser: http://git.debian.org/?p=collab-maint/greyd.git;a=summary
+
+Package: greyd
+Architecture: any
+Depends: ${misc:Depends}
+Description: Greyd greylisting daemon
+ Greyd greylisting daemon strives to be portable and resource efficent.

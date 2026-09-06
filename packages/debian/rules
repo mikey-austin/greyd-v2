@@ -1,0 +1,34 @@
+#!/usr/bin/make -f
+
+# Uncomment this to turn on verbose mode.
+#export DH_VERBOSE=1
+
+GREYD_MAKE_VARS = prefix=/usr sysconfdir=/etc localstatedir=/var \
+	DEFAULT_CONFIG=/etc/greyd/greyd.conf \
+	GREYD_PIDFILE=/var/run/greyd/greyd.pid \
+	GREYLOGD_PIDFILE=/var/run/greylogd/greylogd.pid
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+
+override_dh_auto_build:
+	$(MAKE) $(GREYD_MAKE_VARS)
+
+override_dh_auto_test:
+
+override_dh_auto_install:
+	$(MAKE) install DESTDIR=$(CURDIR)/debian/greyd $(GREYD_MAKE_VARS)
+
+override_dh_install:
+	dh_install
+	rm -f debian/greyd/etc/greyd/greyd.redhat-init
+	rm -f debian/greyd/etc/greyd/greylogd.redhat-init
+	mv debian/greyd/etc/greyd/greylogd.debian-init debian/greylogd.init
+	mv debian/greyd/etc/greyd/greyd.debian-init debian/greyd.init
+	sed -i -e 's/empty/run/g' debian/greyd/etc/greyd/greyd.conf
+
+override_dh_installinit:
+	dh_installinit
+	dh_installinit --name=greylogd

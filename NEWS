@@ -1,0 +1,46 @@
+2026-09-06
+        greyd has been ported from C to Go. The four programs, their command
+        line switches, the greyd.conf configuration files, the SMTP dialogue,
+        the configuration connection wire protocol and the spamd-compatible
+        sync protocol are all unchanged, so the new binaries are a drop-in
+        replacement and still sync with spamd and with older greyd hosts.
+
+        Drivers are now compiled in and selected by name rather than loaded
+        as shared objects. The Berkeley DB drivers have been replaced by the
+        new "bolt" driver, an embedded pure Go key/value store; existing
+        Berkeley DB databases are not readable and are simply rebuilt (they
+        only hold short-lived greylisting state). SPF support and all of the
+        sqlite, mysql, postgresql, bolt & memory database drivers and the
+        netfilter, pf & dummy firewall drivers are always available. The
+        netfilter driver now uses netlink directly for ipset, conntrack and
+        NFLOG instead of the libnetfilter userland libraries.
+
+2015-06-08
+        greyd now sports sync compatibility with spamd.
+
+2015-04-15
+        A host of new database drivers are now available to support different
+        use cases & workloads. The blacklist storage is now implemented by
+        way of a PATRICIA trie, which makes lookups 1000x faster than previous
+        linear search.
+
+2015-02-01
+        Added new SPF validation functionality.
+
+2015-01-28
+        DragonFly BSD is now supported using the pf firewall driver.
+
+2015-01-24
+        NetBSD is now supported using the pf firewall driver. Syncing works between
+        any host running greyd.
+
+2015-01-19
+        There has been an internal re-shuffle in order to isolate the parts of the
+        system that hold a firewall handle to one unprivileged process, with the main
+        connection handling process & grey processes communicating with it over a pipe.
+        Now the main connection handling process has no privileges, and runs chrooted
+        with no direct access to the database (may run as a different user) nor the
+        firewall.
+
+2015-01-07
+        Greyd now has a new PF firewall driver, and will be included in release 0.2.0.

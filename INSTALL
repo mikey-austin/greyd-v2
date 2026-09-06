@@ -1,0 +1,144 @@
+Installing greyd
+================
+
+Requirements
+------------
+
+  * Go 1.25 or later (https://go.dev/dl/)
+  * GNU make
+  * curl at run time, used by greyd-setup to fetch blacklists over HTTP/FTP
+  * Java, only if you edit the configuration grammar and need to run
+    "make generate" (see below); the generated parser sources are committed
+
+All database drivers (sqlite, mysql, postgresql, bolt, memory), all firewall
+drivers (netfilter, pf, dummy) and SPF support are compiled into the programs.
+There are no build-time feature switches and no shared objects to install.
+
+Building
+--------
+
+    $ make
+
+builds greyd, greydb, greyd-setup and greylogd into bin/. The Go toolchain
+downloads the module dependencies on the first build.
+
+Testing
+-------
+
+    $ make test
+
+runs go vet and the unit tests with the race detector. The MySQL and
+PostgreSQL driver tests need a database server; to run them against
+throw-away containers use:
+
+    $ make test-db-docker
+
+Installing
+----------
+
+    $ sudo make install
+
+installs the programs into $(sbindir), the sample configuration and init
+scripts into $(sysconfdir)/greyd and the manual pages into $(mandir). The
+usual GNU variables are honoured, on the command line or in the environment:
+
+    prefix          default /usr/local
+    exec_prefix     default $(prefix)
+    sbindir         default $(exec_prefix)/sbin
+    sysconfdir      default $(prefix)/etc
+    localstatedir   default $(prefix)/var
+    mandir          default $(prefix)/share/man
+    DESTDIR         staging directory for packaging
+
+The following paths are compiled into the programs and substituted into
+the sample configuration files. Pass the same values to "make" and to
+"make install":
+
+    DEFAULT_CONFIG    default $(sysconfdir)/greyd/greyd.conf
+    GREYD_PIDFILE     default $(localstatedir)/empty/greyd/greyd.pid
+    GREYLOGD_PIDFILE  default $(localstatedir)/empty/greylogd/greylogd.pid
+
+For example, for a system-wide installation matching the RPM and Debian
+packages:
+
+    $ make prefix=/usr sysconfdir=/etc localstatedir=/var \
+           DEFAULT_CONFIG=/etc/greyd/greyd.conf \
+           GREYD_PIDFILE=/var/empty/greyd/greyd.pid \
+           GREYLOGD_PIDFILE=/var/empty/greylogd/greylogd.pid
+    $ sudo make install prefix=/usr sysconfdir=/etc localstatedir=/var \
+           DEFAULT_CONFIG=/etc/greyd/greyd.conf \
+           GREYD_PIDFILE=/var/empty/greyd/greyd.pid \
+           GREYLOGD_PIDFILE=/var/empty/greylogd/greylogd.pid
+
+"make uninstall" removes the installed programs and manual pages.
+
+Users and directories
+---------------------
+
+greyd runs as two unprivileged users: the main connection handling process
+runs as "greyd" inside a chroot, and the greylisting processes (which hold
+the database handle) run as "greydb". Create them along with the chroot and
+database directories (the paths below are those used by the packages; adjust
+them if you changed prefix or localstatedir):
+
+    # groupadd greyd
+    # useradd -M -g greyd -d /var/empty/greyd -s /bin/false greyd
+    # groupadd greydb
+    # useradd -M -g greydb -d /var/lib/greyd -s /bin/false greydb
+
+    # install -d -m 0750 -o greyd  -g greyd  /var/empty/greyd
+    # install -d -m 0750 -o greydb -g greydb /var/empty/greylogd
+    # install -d -m 0750 -o greydb -g greydb /var/lib/greyd
+
+/var/empty/greyd is the chroot_dir of the main greyd process and must contain
+the greyd pidfile (GREYD_PIDFILE above). /var/empty/greylogd holds the
+greylogd pidfile. The database directory is the "path" option of the
+database section in greyd.conf; the sample configuration sets it to
+$(localstatedir)/greyd and the bolt and sqlite drivers default to
+/var/db/greyd when it is not set. It must be writable by the "greydb" user.
+
+Configuration
+-------------
+
+Copy or edit $(sysconfdir)/greyd/greyd.conf; see greyd.conf(5) for every
+option. Select the drivers by name:
+
+    section firewall {
+        driver = "netfilter"    # or "pf", "dummy"
+        ...
+    }
+
+    section database {
+        driver = "bolt"         # or "sqlite", "mysql", "postgresql", "memory"
+        path = "/var/lib/greyd"
+        ...
+    }
+
+Configuration files from previous releases that reference driver shared
+objects (eg driver = "/usr/lib/greyd/greyd_sqlite.so") are still accepted;
+the former Berkeley DB drivers map to bolt.
+
+The netfilter driver needs the CAP_NET_ADMIN capability, which greyd retains
+when dropping privileges. Example iptables rules for redirecting SMTP
+connections to greyd and for blacklist-only mode are given in greyd(8).
+
+Blacklists are fetched and loaded into greyd by greyd-setup(8), which should
+be run periodically from cron, for example at 5 minutes past every hour:
+
+    05 * * * * /usr/sbin/greyd-setup -f /etc/greyd/greyd.conf
+
+Init scripts for RHEL-like systems and Debian are installed alongside the
+sample configuration as greyd.redhat-init, greylogd.redhat-init,
+greyd.debian-init and greylogd.debian-init.
+
+Regenerating the configuration parser
+-------------------------------------
+
+The greyd.conf parser is generated with ANTLR4 from
+internal/config/grammar/GreydConf.g4. The generated Go sources are committed
+so a normal build does not need Java. After editing the grammar run:
+
+    $ make generate
+
+which downloads the pinned ANTLR tool jar into .tools/ (using curl) and
+regenerates the lexer and parser.
