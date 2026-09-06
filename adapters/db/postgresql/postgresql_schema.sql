@@ -34,4 +34,4 @@ CREATE TABLE IF NOT EXISTS entries(
 --
 -- Index the greyd_host column (B-tree).
 --
-CREATE INDEX greyd_host_index ON entries("greyd_host");
+CREATE INDEX IF NOT EXISTS greyd_host_index ON entries("greyd_host");
