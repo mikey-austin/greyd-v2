@@ -14,17 +14,17 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-// Command greydb is a placeholder until the application package is ported.
+// Command greydb manages the greyd database.
 package main
 
 import (
-	"fmt"
 	"os"
 
-	"github.com/mikey-austin/greyd-golang/internal/version"
+	_ "github.com/mikey-austin/greyd-golang/adapters/db/all"
+	"github.com/mikey-austin/greyd-golang/internal/app/greydb"
+	_ "github.com/mikey-austin/greyd-golang/internal/config/parse"
 )
 
 func main() {
-	fmt.Fprintf(os.Stderr, "greydb %s: not yet implemented\n", version.Version)
-	os.Exit(1)
+	os.Exit(greydb.Run(os.Args[1:], os.Stdout, os.Stderr))
 }

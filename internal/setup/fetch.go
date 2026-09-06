@@ -1,0 +1,121 @@
+/*
+ * Copyright (c) 2014-2026 Mikey Austin <mikey@greyd.org>
+ *
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
+package setup
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+
+	"github.com/mikey-austin/greyd-golang/internal/config"
+	"github.com/mikey-austin/greyd-golang/internal/spamdlist"
+)
+
+// Fetch methods understood in a list's "method" variable.
+const (
+	MethodFile = "file"
+	MethodHTTP = "http"
+	MethodFTP  = "ftp"
+	MethodExec = "exec"
+
+	// DefaultCurl is used when setup.curl_path is not configured.
+	DefaultCurl = "/bin/curl"
+)
+
+// Open returns the (decompressed, if gzip) contents of the list described
+// by section, selecting the source as get_parser does in main_greyd_setup.c:
+// "file" (or no method) opens a local file, "http"/"ftp" run curl and
+// "exec" runs the "file" variable as a command line.
+func Open(section *config.Section, cfg *config.Config) (io.ReadCloser, error) {
+	file := section.Str("file", "")
+	if file == "" {
+		return nil, errors.New("No file configuration variables set")
+	}
+	method := section.Str("method", "")
+
+	var (
+		rc  io.ReadCloser
+		err error
+	)
+	switch {
+	case method == "" || method == MethodFile:
+		rc, err = os.Open(file)
+	case method == MethodHTTP || method == MethodFTP:
+		curl := cfg.Str("curl_path", "setup", DefaultCurl)
+		args := []string{"-s"}
+		if proxy := cfg.Str("curl_proxy", "setup", ""); proxy != "" {
+			args = append(args, "--proxy", proxy)
+		}
+		args = append(args, method+"://"+file)
+		rc, err = openChild(curl, args...)
+	case method == MethodExec:
+		argv := strings.FieldsFunc(file, func(r rune) bool { return r == ' ' || r == '\t' })
+		if len(argv) == 0 {
+			return nil, errors.New("No file configuration variables set")
+		}
+		rc, err = openChild(argv[0], argv[1:]...)
+	default:
+		return nil, fmt.Errorf("Unknown method %s", method)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	r, err := spamdlist.OpenMaybeGzip(rc)
+	if err != nil {
+		rc.Close()
+		return nil, err
+	}
+	return &readCloser{Reader: r, closer: rc}, nil
+}
+
+// readCloser pairs a decompressing reader with the underlying source.
+type readCloser struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (r *readCloser) Close() error { return r.closer.Close() }
+
+// childReader is a running command's stdout; Close reaps the process.
+type childReader struct {
+	io.ReadCloser
+	cmd *exec.Cmd
+}
+
+func (c *childReader) Close() error {
+	_ = c.ReadCloser.Close()
+	return c.cmd.Wait()
+}
+
+// openChild starts name with args and returns its standard output
+// (open_child).
+func openChild(name string, args ...string) (io.ReadCloser, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("could not execute %s: %w", name, err)
+	}
+	return &childReader{ReadCloser: out, cmd: cmd}, nil
+}

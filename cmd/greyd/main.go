@@ -14,17 +14,18 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-// Command greyd is a placeholder until the application package is ported.
+// Command greyd is the spam deferral daemon. See greyd(8).
 package main
 
 import (
-	"fmt"
 	"os"
 
-	"github.com/mikey-austin/greyd-golang/internal/version"
+	_ "github.com/mikey-austin/greyd-golang/adapters/db/all"
+	_ "github.com/mikey-austin/greyd-golang/adapters/fw/all"
+	"github.com/mikey-austin/greyd-golang/internal/app/greyd"
+	_ "github.com/mikey-austin/greyd-golang/internal/config/parse"
 )
 
 func main() {
-	fmt.Fprintf(os.Stderr, "greyd %s: not yet implemented\n", version.Version)
-	os.Exit(1)
+	os.Exit(greyd.Run(os.Args[1:], os.Stderr))
 }

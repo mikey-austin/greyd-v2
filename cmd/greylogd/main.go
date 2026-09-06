@@ -14,17 +14,18 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-// Command greylogd is a placeholder until the application package is ported.
+// Command greylogd is the greyd whitelist updating daemon.
 package main
 
 import (
-	"fmt"
 	"os"
 
-	"github.com/mikey-austin/greyd-golang/internal/version"
+	_ "github.com/mikey-austin/greyd-golang/adapters/db/all"
+	_ "github.com/mikey-austin/greyd-golang/adapters/fw/all"
+	"github.com/mikey-austin/greyd-golang/internal/app/greylogd"
+	_ "github.com/mikey-austin/greyd-golang/internal/config/parse"
 )
 
 func main() {
-	fmt.Fprintf(os.Stderr, "greylogd %s: not yet implemented\n", version.Version)
-	os.Exit(1)
+	os.Exit(greylogd.Run(os.Args[1:], os.Stderr))
 }

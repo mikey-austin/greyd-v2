@@ -19,4 +19,5 @@ package all
 
 import (
 	_ "github.com/mikey-austin/greyd-golang/adapters/fw/dummy"
+	_ "github.com/mikey-austin/greyd-golang/adapters/fw/netfilter"
 )

@@ -14,17 +14,17 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-// Command greyd-setup is a placeholder until the application package is ported.
+// Command greyd-setup fetches blacklists and loads them into greyd.
 package main
 
 import (
-	"fmt"
 	"os"
 
-	"github.com/mikey-austin/greyd-golang/internal/version"
+	_ "github.com/mikey-austin/greyd-golang/adapters/fw/all"
+	"github.com/mikey-austin/greyd-golang/internal/app/setup"
+	_ "github.com/mikey-austin/greyd-golang/internal/config/parse"
 )
 
 func main() {
-	fmt.Fprintf(os.Stderr, "greyd-setup %s: not yet implemented\n", version.Version)
-	os.Exit(1)
+	os.Exit(setup.Run(os.Args[1:], os.Stderr))
 }
