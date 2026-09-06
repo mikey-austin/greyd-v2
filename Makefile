@@ -100,8 +100,9 @@ generate: $(ANTLR_JAR)
 fmt:
 	$(GO) fmt ./...
 
+# The ANTLR generated parser contains unreachable statements by design.
 vet:
-	$(GO) vet ./...
+	$(GO) vet -unreachable=false ./...
 
 lint: vet
 	@if command -v staticcheck >/dev/null 2>&1; then staticcheck ./...; else echo "staticcheck not installed; skipping"; fi

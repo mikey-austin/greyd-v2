@@ -1,5 +1,3 @@
-//go:build unix
-
 /*
  * Copyright (c) 2014-2026 Mikey Austin <mikey@greyd.org>
  *
@@ -16,35 +14,39 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-package logger
+package core
 
-import "log/syslog"
+// SPFResult is the outcome of an SPF check.
+type SPFResult int
 
-type unixSyslog struct{ w *syslog.Writer }
+const (
+	// SPFNone covers none and neutral results.
+	SPFNone SPFResult = iota
+	SPFPass
+	SPFSoftFail
+	SPFFail
+	// SPFError covers temporary and permanent errors.
+	SPFError
+)
 
-func (u *unixSyslog) Write(sev Severity, msg string) error {
-	switch sev {
-	case SevCrit:
-		return u.w.Crit(msg)
-	case SevErr:
-		return u.w.Err(msg)
-	case SevWarning:
-		return u.w.Warning(msg)
-	case SevDebug:
-		return u.w.Debug(msg)
+func (r SPFResult) String() string {
+	switch r {
+	case SPFNone:
+		return "none"
+	case SPFPass:
+		return "pass"
+	case SPFSoftFail:
+		return "softfail"
+	case SPFFail:
+		return "fail"
 	default:
-		return u.w.Info(msg)
+		return "error"
 	}
 }
 
-func (u *unixSyslog) Close() error { return u.w.Close() }
-
-func init() {
-	openSyslog = func(ident string) (syslogSink, error) {
-		w, err := syslog.New(syslog.LOG_DAEMON|syslog.LOG_INFO, ident)
-		if err != nil {
-			return nil, err
-		}
-		return &unixSyslog{w: w}, nil
-	}
+// SPFChecker validates the envelope sender of a greylist tuple.
+type SPFChecker interface {
+	// Check evaluates the sender policy for the connecting ip, HELO name
+	// and MAIL FROM address.
+	Check(ip, helo, from string) (SPFResult, error)
 }
