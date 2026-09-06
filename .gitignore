@@ -1,0 +1,10 @@
+bin/
+.tools/
+dist/
+*.test
+coverage.out
+etc/greyd.conf
+etc/greyd.docker.conf
+etc/*-init
+*.swp
+*~
