@@ -1,3 +1,5 @@
+//go:build netbsd
+
 /*
  * Copyright (c) 2014-2026 Mikey Austin <mikey@greyd.org>
  *
@@ -14,11 +16,25 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-// Package all registers every firewall driver. Programs blank-import it.
-package all
+package pf
 
 import (
-	_ "github.com/mikey-austin/greyd-golang/adapters/fw/dummy"
-	_ "github.com/mikey-austin/greyd-golang/adapters/fw/netfilter"
-	_ "github.com/mikey-austin/greyd-golang/adapters/fw/pf"
+	"errors"
+	"net/netip"
+	"unsafe"
 )
+
+// bpfAlignment is BPF_ALIGNMENT from NetBSD <net/bpf.h>: sizeof(long).
+const bpfAlignment = unsafe.Sizeof(uintptr(0))
+
+// lockBpf is a no-op: NetBSD's bpf(4) has no BIOCLOCK.
+func lockBpf(int) error { return nil }
+
+// errNoNatlook is returned on systems without a PF DIOCNATLOOK; the
+// caller falls back to the proxy address. NetBSD ships npf rather than PF
+// (the npf driver is not ported yet).
+var errNoNatlook = errors.New("nat lookup not supported on this platform")
+
+func natlook(int, netip.AddrPort, netip.AddrPort) (netip.AddrPort, error) {
+	return netip.AddrPort{}, errNoNatlook
+}

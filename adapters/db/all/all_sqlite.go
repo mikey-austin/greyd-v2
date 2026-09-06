@@ -1,3 +1,5 @@
+//go:build !dragonfly
+
 /*
  * Copyright (c) 2014-2026 Mikey Austin <mikey@greyd.org>
  *
@@ -14,11 +16,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-// Package all registers every firewall driver. Programs blank-import it.
+// The sqlite driver is unavailable on DragonFly BSD (no libc port).
 package all
 
-import (
-	_ "github.com/mikey-austin/greyd-golang/adapters/fw/dummy"
-	_ "github.com/mikey-austin/greyd-golang/adapters/fw/netfilter"
-	_ "github.com/mikey-austin/greyd-golang/adapters/fw/pf"
-)
+import _ "github.com/mikey-austin/greyd-golang/adapters/db/sqlite"

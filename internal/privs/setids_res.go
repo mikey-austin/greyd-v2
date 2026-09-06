@@ -1,3 +1,5 @@
+//go:build !netbsd
+
 /*
  * Copyright (c) 2014-2026 Mikey Austin <mikey@greyd.org>
  *
@@ -14,11 +16,21 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-// Package all registers every firewall driver. Programs blank-import it.
-package all
+package privs
 
 import (
-	_ "github.com/mikey-austin/greyd-golang/adapters/fw/dummy"
-	_ "github.com/mikey-austin/greyd-golang/adapters/fw/netfilter"
-	_ "github.com/mikey-austin/greyd-golang/adapters/fw/pf"
+	"fmt"
+
+	"golang.org/x/sys/unix"
 )
+
+// setIDs sets the real, effective and saved gid and uid.
+func setIDs(uid, gid int) error {
+	if err := unix.Setresgid(gid, gid, gid); err != nil {
+		return fmt.Errorf("setresgid: %w", err)
+	}
+	if err := unix.Setresuid(uid, uid, uid); err != nil {
+		return fmt.Errorf("setresuid: %w", err)
+	}
+	return nil
+}

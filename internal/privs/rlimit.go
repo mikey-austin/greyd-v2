@@ -36,7 +36,7 @@ func MaxFiles() (int, error) {
 	var lim unix.Rlimit
 	max := DefaultMaxCons
 	if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &lim); err == nil && lim.Max != unix.RLIM_INFINITY {
-		if lim.Max > 1<<30 {
+		if lim.Max > 1<<30 || lim.Max < 0 {
 			max = 1 << 30
 		} else {
 			max = int(lim.Max)
@@ -50,7 +50,7 @@ func MaxFiles() (int, error) {
 
 // SetMaxFiles self-imposes a descriptor limit (setrlimit RLIMIT_NOFILE).
 func SetMaxFiles(n int) error {
-	lim := unix.Rlimit{Cur: uint64(n), Max: uint64(n)}
+	lim := unix.Rlimit{Cur: rlimT(n), Max: rlimT(n)}
 	if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &lim); err != nil {
 		return fmt.Errorf("setrlimit: %w", err)
 	}

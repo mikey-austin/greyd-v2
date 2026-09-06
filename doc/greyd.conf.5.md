@@ -168,7 +168,7 @@ This driver runs on GNU/Linux systems and talks to the kernel directly over netl
 
 ### PF firewall driver
 
-This driver runs on BSD systems making use of the PF firewall. The driver makes use of *libpcap*.
+This driver runs on BSD systems making use of the PF firewall. Tables are replaced through *pfctl*, logged packets are read directly from the *bpf* device attached to the *pflog* interface, and original destination lookups use the *DIOCNATLOOK* ioctl (OpenBSD, FreeBSD and DragonFly BSD; on NetBSD the proxy address is returned).
 
 * **pfdev_path** = *string*:
   Path to pfdev, defaults to */dev/pf*.

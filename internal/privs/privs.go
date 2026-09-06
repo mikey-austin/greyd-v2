@@ -69,11 +69,8 @@ func Drop(u *user.User) error {
 			return fmt.Errorf("setgroups: %w", err)
 		}
 	}
-	if err := unix.Setresgid(gid, gid, gid); err != nil {
-		return fmt.Errorf("setresgid: %w", err)
-	}
-	if err := unix.Setresuid(uid, uid, uid); err != nil {
-		return fmt.Errorf("setresuid: %w", err)
+	if err := setIDs(uid, gid); err != nil {
+		return err
 	}
 
 	if wasRoot && uid != 0 {

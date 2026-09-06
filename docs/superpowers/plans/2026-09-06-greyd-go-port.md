@@ -94,10 +94,10 @@ doc/ etc/ packages/ utils/ website/ README.md INSTALL COPYING AUTHORS ChangeLog 
   func SetExit(f func(int))                    // test hook
   ```
 - Steps:
-- [ ] `go mod init github.com/mikey-austin/greyd-golang`; `.gitignore` with `bin/ .tools/ *.test coverage.out dist/ etc/greyd.conf etc/greyd.docker.conf etc/*-init`.
-- [ ] Makefile targets: `all build generate test test-race lint fmt man install uninstall dist docker clean`. Variables: `VERSION=1.0.0`, `prefix=/usr/local`, `sbindir=$(prefix)/sbin`, `sysconfdir=$(prefix)/etc`, `localstatedir=$(prefix)/var`, `mandir=$(prefix)/share/man`, `DEFAULT_CONFIG=$(sysconfdir)/greyd/greyd.conf`, `GREYD_PIDFILE=$(localstatedir)/empty/greyd/greyd.pid`, `GREYLOGD_PIDFILE=$(localstatedir)/empty/greylogd/greylogd.pid`, `CURL=/usr/bin/curl`, `ANTLR_VERSION=4.13.1`, `ANTLR_JAR=.tools/antlr-$(ANTLR_VERSION)-complete.jar`. `LDFLAGS=-X ...version.Version=$(VERSION) -X ...DefaultConfig=$(DEFAULT_CONFIG) ...`. `build` compiles the four programs into `bin/` with `CGO_ENABLED=0`. `generate` downloads the jar with curl if missing and runs `java -jar $(ANTLR_JAR) -Dlanguage=Go -package grammar -o internal/config/grammar -Xexact-output-dir internal/config/grammar/GreydConf.g4`. `install` uses `install -m 0750` for binaries, substitutes `etc/*.in` with sed exactly like `etc/Makefile.am`, installs man pages from `doc/*.8` and `doc/*.5`.
-- [ ] Logger test: with `Stderr` set to a `bytes.Buffer`, `Syslog:false`, `Debug:false`: `Debug("x")` writes nothing, `Info("hi %d", 1)` writes `ident[<pid>]: hi 1\n`; with `Debug:true` debug lines appear; `Fatal` calls the exit hook with 1. File output uses an exclusive `flock` per write like `log.c`.
-- [ ] Run `make build test`, commit `Scaffold Go module, Makefile, logger and version package`.
+- [x] `go mod init github.com/mikey-austin/greyd-golang`; `.gitignore` with `bin/ .tools/ *.test coverage.out dist/ etc/greyd.conf etc/greyd.docker.conf etc/*-init`.
+- [x] Makefile targets: `all build generate test test-race lint fmt man install uninstall dist docker clean`. Variables: `VERSION=1.0.0`, `prefix=/usr/local`, `sbindir=$(prefix)/sbin`, `sysconfdir=$(prefix)/etc`, `localstatedir=$(prefix)/var`, `mandir=$(prefix)/share/man`, `DEFAULT_CONFIG=$(sysconfdir)/greyd/greyd.conf`, `GREYD_PIDFILE=$(localstatedir)/empty/greyd/greyd.pid`, `GREYLOGD_PIDFILE=$(localstatedir)/empty/greylogd/greylogd.pid`, `CURL=/usr/bin/curl`, `ANTLR_VERSION=4.13.1`, `ANTLR_JAR=.tools/antlr-$(ANTLR_VERSION)-complete.jar`. `LDFLAGS=-X ...version.Version=$(VERSION) -X ...DefaultConfig=$(DEFAULT_CONFIG) ...`. `build` compiles the four programs into `bin/` with `CGO_ENABLED=0`. `generate` downloads the jar with curl if missing and runs `java -jar $(ANTLR_JAR) -Dlanguage=Go -package grammar -o internal/config/grammar -Xexact-output-dir internal/config/grammar/GreydConf.g4`. `install` uses `install -m 0750` for binaries, substitutes `etc/*.in` with sed exactly like `etc/Makefile.am`, installs man pages from `doc/*.8` and `doc/*.5`.
+- [x] Logger test: with `Stderr` set to a `bytes.Buffer`, `Syslog:false`, `Debug:false`: `Debug("x")` writes nothing, `Info("hi %d", 1)` writes `ident[<pid>]: hi 1\n`; with `Debug:true` debug lines appear; `Fatal` calls the exit hook with 1. File output uses an exclusive `flock` per write like `log.c`.
+- [x] Run `make build test`, commit `Scaffold Go module, Makefile, logger and version package`.
 
 ---
 
@@ -137,8 +137,8 @@ func (c *Config) Merge(from *Config)                       // sections only, clo
 func (c *Config) AddInclude(pattern string)                // glob + "~" expansion, queue unprocessed matches
 func (c *Config) MarkProcessed(path string); PendingIncludes() []string; popInclude() (string, bool)
 ```
-- [ ] Tests port `check/test_config.c`, `test_config_section.c`, `test_config_value.c`: getters with defaults, wrong-type returns default, list append creates the list, merge overrides and creates sections, `Str` returns "" default, `Delete` removes, `AddInclude` with a temp dir containing `a.conf b.conf c.txt` and pattern `<dir>/*.conf` queues two paths in sorted order and skips already processed ones; `~/x` expands `$HOME`.
-- [ ] Implement, run, commit `Add configuration model`.
+- [x] Tests port `check/test_config.c`, `test_config_section.c`, `test_config_value.c`: getters with defaults, wrong-type returns default, list append creates the list, merge overrides and creates sections, `Str` returns "" default, `Delete` removes, `AddInclude` with a temp dir containing `a.conf b.conf c.txt` and pattern `<dir>/*.conf` queues two paths in sorted order and skips already processed ones; `~/x` expands `$HOME`.
+- [x] Implement, run, commit `Add configuration model`.
 
 ---
 
@@ -189,8 +189,8 @@ func (c *Config) LoadFile(path string) error     // parse file, mark processed, 
 ```
 Listener semantics: assignments outside sections go to `DefaultSection` (created if missing on `Into`); a `section`/`blacklist`/`whitelist` creates a fresh `Section` replacing any existing one of the same name (as the C parser does); `include` calls `cfg.AddInclude(unescaped)`. Use a custom `antlr.ErrorListener` that records the first error and stop.
 
-- [ ] Tests (port `test_config_lexer.c`, `test_config_parser.c`, `test_config.c` include section): the string from `test_config_parser.c` parses; `test_var_1 == 12345`; section value `long "string"`; list sizes 2/2/3; blacklist/whitelist sections are retrievable through `Blacklist()`/`Whitelist()`; one pending include `testdata/config_test1.conf`; `LoadFile("testdata/config_test1.conf")` yields `limit == 25`, `another_global == "this is overwritten"`, `storage.storage_driver == "MySQL"`, `cache.port == 11211`, and each file processed exactly once (cycle `config_test3.conf -> config_test1.conf`). Error case: `foo = @` returns `*Error` with Line 1. Multi-line string with embedded newline parses. `Section GREY { a = 1 }` -> section name `grey`. Empty list `x = []` -> empty list. Trailing comma `x = [1, 2,]` -> 2 items. `a = 1; b = 2` -> both set.
-- [ ] Commit `Add ANTLR grammar, parser and config loader`.
+- [x] Tests (port `test_config_lexer.c`, `test_config_parser.c`, `test_config.c` include section): the string from `test_config_parser.c` parses; `test_var_1 == 12345`; section value `long "string"`; list sizes 2/2/3; blacklist/whitelist sections are retrievable through `Blacklist()`/`Whitelist()`; one pending include `testdata/config_test1.conf`; `LoadFile("testdata/config_test1.conf")` yields `limit == 25`, `another_global == "this is overwritten"`, `storage.storage_driver == "MySQL"`, `cache.port == 11211`, and each file processed exactly once (cycle `config_test3.conf -> config_test1.conf`). Error case: `foo = @` returns `*Error` with Line 1. Multi-line string with embedded newline parses. `Section GREY { a = 1 }` -> section name `grey`. Empty list `x = []` -> empty list. Trailing comma `x = [1, 2,]` -> 2 items. `a = 1; b = 2` -> both set.
+- [x] Commit `Add ANTLR grammar, parser and config loader`.
 
 ---
 
@@ -220,8 +220,8 @@ func WriteDst(w io.Writer, dst string) error                                // d
 const ( MsgGrey = 1; MsgTrap = 2; MsgWhite = 3 )
 ```
 Strings are written with `"` and `\` escaped by a preceding backslash (the C code writes raw; escaping is a strict improvement for addresses containing quotes and never changes output for normal values).
-- [ ] Tests: encode `WriteBlacklist("greyd-blacklist","Your IP %A", ["1.2.3.4","10.0.0.0/8","2001::1"])` equals `name="greyd-blacklist"\nmessage="Your IP %A"\nips=["1.2.3.4/32","10.0.0.0/8","2001::1/128"]\n%%\n`; reader round-trips two consecutive frames and then `io.EOF`; a frame containing `==` yields a parse error and the reader can continue to the next frame; a stream ending without terminator yields the final partial frame then EOF (matches the C behaviour where EOF completes the parse).
-- [ ] Commit `Add IPC frame reader and message encoders`.
+- [x] Tests: encode `WriteBlacklist("greyd-blacklist","Your IP %A", ["1.2.3.4","10.0.0.0/8","2001::1"])` equals `name="greyd-blacklist"\nmessage="Your IP %A"\nips=["1.2.3.4/32","10.0.0.0/8","2001::1/128"]\n%%\n`; reader round-trips two consecutive frames and then `io.EOF`; a frame containing `==` yields a parse error and the reader can continue to the next frame; a stream ending without terminator yields the final partial frame then EOF (matches the C behaviour where EOF completes the parse).
+- [x] Commit `Add IPC frame reader and message encoders`.
 
 ---
 
@@ -251,8 +251,8 @@ func (b *Blacklist) AddRange(start, end uint32, t Type) // start>end ignored; ap
 func (b *Blacklist) Collapse() []string                  // sort, sweep, RangeToCIDRs(bstart, addr-1) on 1->0 transitions; nil when empty
 ```
 Trie: binary trie over prefix bits per family (`map[int]*node`); `Match` walks the address bits and returns true when any node on the path is terminal.
-- [ ] Tests port `test_ip.c` (CIDR string, range, `192.168.0.1-192.168.0.25` -> the six CIDRs, matching, `CheckAddr`) and `test_blacklist.c` (`AddRange` entries, three overlapping regions collapse to `10.0.0.0/27`, `10.0.0.32/29`; trie matches for `192.168.12.1/24`, `10.20.1.3/16`, `fe80::0202:b3ff:fe1e:2201/120`, `2010:2acd::beef:a322/64`) and `test_trie.c` semantics (duplicates do not increase matches; longer and shorter prefixes coexist).
-- [ ] Commit `Add IP math and blacklist storage`.
+- [x] Tests port `test_ip.c` (CIDR string, range, `192.168.0.1-192.168.0.25` -> the six CIDRs, matching, `CheckAddr`) and `test_blacklist.c` (`AddRange` entries, three overlapping regions collapse to `10.0.0.0/27`, `10.0.0.32/29`; trie matches for `192.168.12.1/24`, `10.20.1.3/16`, `fe80::0202:b3ff:fe1e:2201/120`, `2010:2acd::beef:a322/64`) and `test_trie.c` semantics (duplicates do not increase matches; longer and shorter prefixes coexist).
+- [x] Commit `Add IP math and blacklist storage`.
 
 ---
 
@@ -269,8 +269,8 @@ func Parse(r io.Reader, bl *blacklist.Blacklist, t blacklist.Type) error   // gr
 func OpenMaybeGzip(r io.Reader) (io.Reader, error)                           // sniff 0x1f 0x8b
 ```
 Semantics from `spamd_lexer.c`: digit runs accumulate while `<= 255`, otherwise split; whitespace skipped; `#` to end of line skipped; unknown char -> EOF. Entry forms: `a.b.c.d`, `a.b.c.d/n` (n must be Int6), `a.b.c.d - e.f.g.h`; `AddRange(start, end+1, t)`.
-- [ ] Tests port `test_spamd_lexer.c` token sequence (including `123455` -> 123, 45, 5) and `test_spamd_parser.c`; gzip round trip via `compress/gzip`.
-- [ ] Commit `Add spamd list scanner and parser`.
+- [x] Tests port `test_spamd_lexer.c` token sequence (including `123455` -> 123, 45, 5) and `test_spamd_parser.c`; gzip round trip via `compress/gzip`.
+- [x] Commit `Add spamd list scanner and parser`.
 
 ---
 
@@ -298,7 +298,7 @@ package dbtest
 func RunConformance(t *testing.T, open func(t *testing.T) core.Store)
 ```
 Conformance scenarios (from `test_db.c` and the tally logic of `test_grey.c`): put/get/del of IP, MAIL, DOM, TUPLE keys; `Get` of missing -> found=false; `Del` missing -> found=false; iterate all types and count by key type; `DomainPart` lookup `x@sub.domain1.com` matches stored `domain1.com` and `greyd@domain3.com` matches exactly; `Scan` deletes expired white/trap/grey but not spamtraps or domains (expire 0, pcount -2/-3), whitelists a passed tuple (re-keyed by IP, `expire == now+whiteExp`), skips whitelisting when the IP is trapped, returns v4/v6 lists split by `:`; transaction rollback discards a put; `ReplaceCurrent`/`DeleteCurrent` on an iterator.
-- [ ] Commit `Add core ports, registry, memory store and conformance suite`.
+- [x] Commit `Add core ports, registry, memory store and conformance suite`.
 
 ---
 
@@ -307,8 +307,8 @@ Conformance scenarios (from `test_db.c` and the tally logic of `test_grey.c`): p
 **Files:** `adapters/db/bolt/bolt.go`, `bolt_test.go`
 
 Config: `path` (dir, default `/var/db/greyd`, created 0700 and chowned to `StoreOptions.User` when created), `db_name` (default `greyd.db`). Buckets `entries` (IP and TUPLE keys), `spamtraps`, `domains`. Key encoding: `byte(type) + fields joined by 0x00`. Value: 5 x int64 big-endian. Transactions: `Begin` opens a `bbolt` writable tx (RO mode opens read tx); operations without an explicit `Begin` run in an auto tx. `Scan` = `kvscan.Scan`. `DomainPart` lookup iterates domains bucket with `strings.HasSuffix(strings.ToLower(key), domain)`.
-- [ ] Test: `dbtest.RunConformance` with a temp dir; register name `bolt`.
-- [ ] Commit `Add bolt store adapter`.
+- [x] Test: `dbtest.RunConformance` with a temp dir; register name `bolt`.
+- [x] Commit `Add bolt store adapter`.
 
 ---
 
@@ -317,8 +317,8 @@ Config: `path` (dir, default `/var/db/greyd`, created 0700 and chowned to `Store
 **Files:** `adapters/db/sqlcommon/sqlcommon.go`, `adapters/db/sqlite/sqlite.go`, `sqlite_test.go`
 
 `sqlcommon` holds the row mapping (`populate_key`/`populate_val` logic: empty helo/from/to => IP key unless pcount -2 (MAIL) or -3 (DOM)), the iterator over `*sql.Rows`, and the three scan statements parameterised by dialect (placeholder style, identifier quoting, `UNIX_TIMESTAMP()`/`EXTRACT(EPOCH FROM now())`/bound `now`, optional `greyd_host` predicate). SQLite specifics from `sqlite.c`: schema creation on open, `BEGIN IMMEDIATE`/`COMMIT` with up to 20 retries of 5 s on busy (retry sleep injectable for tests), `INSERT OR REPLACE`, `INSERT OR IGNORE`, `? LIKE '%' || domain`, the `UPDATE OR REPLACE ... NOT IN (...)` whitelisting statement and the three-way `UNION` select. `Del` returns `RowsAffected() > 0`. Driver import `modernc.org/sqlite` (`sql.Open("sqlite", path)`).
-- [ ] Test: conformance with temp file; `Open` twice is a no-op; missing dir created 0700.
-- [ ] Commit `Add sqlite store adapter`.
+- [x] Test: conformance with temp file; `Open` twice is a no-op; missing dir created 0700.
+- [x] Commit `Add sqlite store adapter`.
 
 ---
 
@@ -327,7 +327,7 @@ Config: `path` (dir, default `/var/db/greyd`, created 0700 and chowned to `Store
 **Files:** `adapters/db/mysql/mysql.go`, `mysql_test.go`, `adapters/db/postgresql/postgresql.go`, `postgresql_test.go`, `adapters/db/all/all.go`, Makefile target `test-db-docker`, `packages/docker/docker-compose.test.yml`
 
 Config keys (both): `host` (localhost), `port` (3306 / 5432), `name` (greyd), `user`, `pass`, `socket`. Schemas from `drivers/*_schema.sql` created with `CREATE TABLE IF NOT EXISTS` on open (the C drivers require pre-creation; auto-create is additive). `greyd_host` = `StoreOptions.Hostname` on every entries insert; scan delete/update restricted to own host (`mysql.c`/`postgresql.c` statements verbatim, with parameters instead of string formatting). MySQL upsert: `INSERT ... ON DUPLICATE KEY UPDATE`; PostgreSQL: `INSERT ... ON CONFLICT (...) DO UPDATE`. Tests skip unless `GREYD_TEST_MYSQL_DSN` / `GREYD_TEST_POSTGRESQL_DSN` set. `make test-db-docker` runs `docker compose -f packages/docker/docker-compose.test.yml up -d`, waits for readiness, exports the DSNs, runs the two test packages, then `down -v`.
-- [ ] Commit `Add mysql and postgresql store adapters`.
+- [x] Commit `Add mysql and postgresql store adapters`.
 
 ---
 
@@ -356,8 +356,8 @@ type Spawn struct { Role string; Files map[string]*os.File; Env []string }
 func (s Spawn) Start() (*exec.Cmd, error)                 // exec.Command(os.Executable(), os.Args[1:]...) with ExtraFiles in sorted name order and env GREYD_FD_<NAME>=<index+3>
 func InheritedFile(name string) (*os.File, error)         // os.NewFile from GREYD_FD_<NAME>
 ```
-- [ ] Tests: pidfile lock detects a second writer in the same process via a helper subprocess (`go test` re-exec pattern with `GO_TEST_HELPER=1`); `Close` strips chroot prefix; `procs.Spawn` with a pipe and role `echo` round-trips data through the test binary helper; `Drop` on non-root returns nil when target is current user.
-- [ ] Commit `Add privilege, pidfile and process spawning helpers`.
+- [x] Tests: pidfile lock detects a second writer in the same process via a helper subprocess (`go test` re-exec pattern with `GO_TEST_HELPER=1`); `Close` strips chroot prefix; `procs.Spawn` with a pipe and role `echo` round-trips data through the test binary helper; `Drop` on non-root returns nil when target is current user.
+- [x] Commit `Add privilege, pidfile and process spawning helpers`.
 
 ---
 
@@ -394,8 +394,8 @@ func NewServer(cfg Config, deps Deps, counters *Counters) *Server
 func (s *Server) ServeListener(ctx context.Context, l net.Listener)  // accept loop with EMFILE throttle, max cons check, logs "connected (x/y)"
 ```
 State constants and transitions copied from `con.h`/`con.c` (ProxyIn -3 ... Close 99). Stuttering in `HandleWrite`: if `Stutter>0 && within_max` write one byte then `Sleep(Stutter seconds)`, else write all remaining; insert `\r` before `\n` when the previous byte written was not `\r`. Grey stutter cutoff and abandon rule as in spec §5. Read: up to 8191 bytes until a byte in `"\n"` appears or buffer full; trailing `\r`/`\n` trimmed; 400 s deadline via `SetReadDeadline` when rw is a `net.Conn`.
-- [ ] Tests port `test_con.c`: init state/last state, two matching lists, summary `blacklist_1 blacklist_2`, banner length 75 for hostname `greyd.org` at a fixed time, close resets counters, summary truncation `blacklist_2 ...` for the long name, `BuildReply("451")` for two lists equals the C expected text, write without stutter and with stutter (adds `\r`), greylisted reply is always `451 Temporary failure, please try again later.\r\n`, full dialogue over `net.Pipe`: `EHLO greyd.org` -> helo `greyd.org`; `MAIL FROM: <Mikey@greyd.ORG>` -> `mikey@greyd.org`; `RCPT TO: info@greyd.org` -> grey message written to `GreyOut` with `dst_ip` from `OrigDst`; `DATA` -> `354`, then for greylisted `451`; `QUIT` -> `221 greyd.org`; 21 unknown commands -> reply and close; proxy header parse table (`PROXY TCP4 1.2.3.4 5.6.7.8 1 2` ok, `PROXY UNKNOWN` unknown, `PROXY TCP4 x y 1 2` error) and rejection from a non-permitted proxy.
-- [ ] Commit `Add SMTP tarpit connection state machine`.
+- [x] Tests port `test_con.c`: init state/last state, two matching lists, summary `blacklist_1 blacklist_2`, banner length 75 for hostname `greyd.org` at a fixed time, close resets counters, summary truncation `blacklist_2 ...` for the long name, `BuildReply("451")` for two lists equals the C expected text, write without stutter and with stutter (adds `\r`), greylisted reply is always `451 Temporary failure, please try again later.\r\n`, full dialogue over `net.Pipe`: `EHLO greyd.org` -> helo `greyd.org`; `MAIL FROM: <Mikey@greyd.ORG>` -> `mikey@greyd.org`; `RCPT TO: info@greyd.org` -> grey message written to `GreyOut` with `dst_ip` from `OrigDst`; `DATA` -> `354`, then for greylisted `451`; `QUIT` -> `221 greyd.org`; 21 unknown commands -> reply and close; proxy header parse table (`PROXY TCP4 1.2.3.4 5.6.7.8 1 2` ok, `PROXY UNKNOWN` unknown, `PROXY TCP4 x y 1 2` error) and rejection from a non-permitted proxy.
+- [x] Commit `Add SMTP tarpit connection state machine`.
 
 ---
 
@@ -428,8 +428,8 @@ func (e *Engine) Conn() net.PacketConn
 func (e *Engine) Recv(greyOut io.Writer, greylistEnabled bool) // one packet -> ipc.WriteGreyFromSync / ipc.WriteAddr("sync=0")
 func (e *Engine) Update(t core.Tuple, now time.Time); White(ip string, now, expire time.Time, del bool); Trapped(...)
 ```
-- [ ] Tests: encode a grey entry with zero key and assert the exact byte length (`32 + align16(20+len) + 4`) and that `Decode` round-trips; addr TLV is 16 bytes; HMAC mismatch -> error; truncated -> error; a fixed golden packet captured from the C code layout (construct by hand in the test from the struct definition) decodes to expected fields; two engines on loopback unicast exchange a white entry and the receiver writes `type = 3\nsync = 0\nip = "1.2.3.4"\nsource = "127.0.0.1"\nexpires = "N"\ndelete = 0\n%%\n`.
-- [ ] Commit `Add spamd-compatible sync engine`.
+- [x] Tests: encode a grey entry with zero key and assert the exact byte length (`32 + align16(20+len) + 4`) and that `Decode` round-trips; addr TLV is 16 bytes; HMAC mismatch -> error; truncated -> error; a fixed golden packet captured from the C code layout (construct by hand in the test from the struct definition) decodes to expected fields; two engines on loopback unicast exchange a white entry and the receiver writes `type = 3\nsync = 0\nip = "1.2.3.4"\nsource = "127.0.0.1"\nexpires = "N"\ndelete = 0\n%%\n`.
+- [x] Commit `Add spamd-compatible sync engine`.
 
 ---
 
@@ -438,8 +438,8 @@ func (e *Engine) Update(t core.Tuple, now time.Time); White(ip string, now, expi
 **Files:** `adapters/spf/spf.go`, `spf_test.go`, `adapters/fw/dummy/dummy.go`, `dummy_test.go`, `adapters/fw/all/all.go`
 
 `spf.New()` returns a `core.SPFChecker` using `blitiri.com.ar/go/spf` `CheckHostWithSender(ip, helo, from)`: `spf.Pass`->SPFPass, `Fail`->SPFFail, `SoftFail`->SPFSoftFail, `Neutral|None`->SPFNone, others -> SPFError with the library error. Add `SPFSoftFail` to core. Dummy firewall: `Replace` returns `len(cidrs)`, `CaptureLog` blocks on ctx then returns nil, `LookupOrigDst` returns proxy.
-- [ ] Tests: spf mapping through an injected resolver (`spf.DefaultResolver` replaced by a `net.Resolver` pointing at a stub DNS? too heavy) -> test only the result mapping function with a table; dummy firewall trivial tests; registry finds `dummy`.
-- [ ] Commit `Add SPF checker and dummy firewall adapters`.
+- [x] Tests: spf mapping through an injected resolver (`spf.DefaultResolver` replaced by a `net.Resolver` pointing at a stub DNS? too heavy) -> test only the result mapping function with a table; dummy firewall trivial tests; registry finds `dummy`.
+- [x] Commit `Add SPF checker and dummy firewall adapters`.
 
 ---
 
@@ -461,8 +461,8 @@ func (g *Greylister) RunReader(ctx context.Context, in io.Reader) error   // ipc
 func (g *Greylister) ScanOnce() error                     // Grey_scan_db: txn, Store.Scan, ipc.WriteBlacklist(trap), ipc.WriteReplace v4 (+v6 when enable_ipv6)
 func (g *Greylister) RunScanner(ctx context.Context, interval time.Duration) error
 ```
-- [ ] Tests port `test_grey.c` with the memory store: after the 20 messages the tallies are `entries 17, white 5, grey 3, trapped 6, spamtrap 1, white passed 3, white blocked 0, grey passed 0, grey blocked 6`; after adjusting one tuple's expire and another's pass and running `ScanOnce` the fw pipe contains a `replace` frame with `name="greyd-whitelist"`, `af=4` and the trap pipe contains `name="test traplist"` with 5 ips; tallies `14/5/1/5/1/3/2/0/2`; low priority MX trap when startup is 120 s ago; `LoadDomains` returns `[domain4.com domain2.com]`; parse error stops the reader.
-- [ ] Commit `Add greylisting engine`.
+- [x] Tests port `test_grey.c` with the memory store: after the 20 messages the tallies are `entries 17, white 5, grey 3, trapped 6, spamtrap 1, white passed 3, white blocked 0, grey passed 0, grey blocked 6`; after adjusting one tuple's expire and another's pass and running `ScanOnce` the fw pipe contains a `replace` frame with `name="greyd-whitelist"`, `af=4` and the trap pipe contains `name="test traplist"` with 5 ips; tallies `14/5/1/5/1/3/2/0/2`; low priority MX trap when startup is 120 s ago; `LoadDomains` returns `[domain4.com domain2.com]`; parse error stops the reader.
+- [x] Commit `Add greylisting engine`.
 
 ---
 
@@ -478,10 +478,10 @@ func (g *Greylister) RunScanner(ctx context.Context, interval time.Duration) err
 
 `runGreyChild`: `grey.New` with a store for the scanner and a second store for the reader, lookup `grey.user`, delete `sync.bind_address`, start sync sender if hosts configured, drop privs, optional SPF, run reader and scanner goroutines; exit when either ends; SIGTERM the parent as C does when the scanner stops.
 
-- [ ] `options_test.go`: table of flag sets -> expected config values (`-G 25:4:864` -> 1500/14400/3110400; `-b` -> grey.enable 0; `-5` -> error_code 550; `-Y a -Y b` -> two hosts; invalid `-s 11` -> error).
-- [ ] `integration_test.go`: build a `*config.Config` in code (`drop_privs = 0`, `chroot = 0`, `daemonize = 0`, `setrlimit = 0`, `port = 0` semantics: use `bind_address = 127.0.0.1` and an OS-assigned port through an exported `runMainWithListeners` hook), memory store, dummy firewall, in-process children (`startChildrenInProcess` variant used only by tests that runs the fw and grey roles as goroutines over `os.Pipe`s), then: connect with `net.Dial`, read `220`, send `EHLO`, `MAIL FROM`, `RCPT TO`, `DATA`, expect `451`; assert the memory store holds the grey tuple; open a second connection from a reserved port is not possible unprivileged, so test the config path by calling the shared `addBlacklistFromFrame` directly and then asserting a new connection from `10.0.0.1` (via proxy protocol with permitted proxies `127.0.0.0/8`) receives the blacklist message.
-- [ ] `cmd/greyd/main.go`: `os.Exit(greyd.Run(os.Args[1:]))` with blank imports of `adapters/db/all`, `adapters/fw/all`.
-- [ ] Commit `Add greyd daemon application`.
+- [x] `options_test.go`: table of flag sets -> expected config values (`-G 25:4:864` -> 1500/14400/3110400; `-b` -> grey.enable 0; `-5` -> error_code 550; `-Y a -Y b` -> two hosts; invalid `-s 11` -> error).
+- [x] `integration_test.go`: build a `*config.Config` in code (`drop_privs = 0`, `chroot = 0`, `daemonize = 0`, `setrlimit = 0`, `port = 0` semantics: use `bind_address = 127.0.0.1` and an OS-assigned port through an exported `runMainWithListeners` hook), memory store, dummy firewall, in-process children (`startChildrenInProcess` variant used only by tests that runs the fw and grey roles as goroutines over `os.Pipe`s), then: connect with `net.Dial`, read `220`, send `EHLO`, `MAIL FROM`, `RCPT TO`, `DATA`, expect `451`; assert the memory store holds the grey tuple; open a second connection from a reserved port is not possible unprivileged, so test the config path by calling the shared `addBlacklistFromFrame` directly and then asserting a new connection from `10.0.0.1` (via proxy protocol with permitted proxies `127.0.0.0/8`) receives the blacklist message.
+- [x] `cmd/greyd/main.go`: `os.Exit(greyd.Run(os.Args[1:]))` with blank imports of `adapters/db/all`, `adapters/fw/all`.
+- [x] Commit `Add greyd daemon application`.
 
 ---
 
@@ -490,8 +490,8 @@ func (g *Greylister) RunScanner(ctx context.Context, interval time.Duration) err
 **Files:** `internal/app/greydb/greydb.go`, `greydb_test.go`, `cmd/greydb/main.go`
 
 Port `main_greydb.c`: flags `a d t T D f: Y:`; list mode prints `GREY|...`, `WHITE|ip|||first|pass|expire|bcount|pcount`, `TRAPPED|ip|expire`, `SPAMTRAP|addr`, `DOMAIN|addr`; add/update/delete rules including `pcount` values (-1 trap, -2 spamtrap, -3 domain), email normalisation (`NormalizeEmail`: strip `<>`, drop `\\` and `"`, lowercase — put in `internal/core/tuple.go`), `IP.CheckAddr` validation, sync of WHITE/TRAPPED, `syslog_enable = 0`, `drop_privs = 0`, RO open for listing. `Run(args []string, stdout, stderr io.Writer) int`.
-- [ ] Tests with a temp bolt store config file: add white -> listing line format; add spamtrap `<Trap@Example.ORG>` -> `SPAMTRAP|trap@example.org`; delete missing -> exit 1 and `No entry for`; `-T` without `-a/-d` -> usage.
-- [ ] Commit `Add greydb tool`.
+- [x] Tests with a temp bolt store config file: add white -> listing line format; add spamtrap `<Trap@Example.ORG>` -> `SPAMTRAP|trap@example.org`; delete missing -> exit 1 and `No entry for`; `-T` without `-a/-d` -> usage.
+- [x] Commit `Add greydb tool`.
 
 ---
 
@@ -500,8 +500,8 @@ Port `main_greydb.c`: flags `a d t T D f: Y:`; list mode prints `GREY|...`, `WHI
 **Files:** `internal/setup/setup.go`, `fetch.go`, `setup_test.go`, `internal/app/setup/setup.go`, `cmd/greyd-setup/main.go`
 
 `fetch.go`: `Open(section *config.Section, cfg *config.Config) (io.ReadCloser, error)` for methods `file`, `http`/`ftp` (exec `curl -s [--proxy P] URL`, `curl_path` default `/bin/curl`), `exec` (split on space/tab, `exec.Command`), then `spamdlist.OpenMaybeGzip`. `setup.go`: `Run(cfg, opts Options{Dryrun, Debug, GreyOnly bool}, fw core.Firewall, dial func() (net.Conn, error)) error` implementing the list loop from `main_greyd_setup.c` (new blacklist flushes the previous; whitelist merges into the current blacklist; per-list debug line `blacklist name N entries`; collapse; `ipc.WriteBlacklist` over a fresh config connection per list; in `-b` mode accumulate all CIDRs and `fw.Replace("greyd-blacklist", all, IPv4)` after the final list). `DialReserved(port int) (net.Conn, error)`: try local ports 1023 down to 512 with `net.Dialer{LocalAddr}` until one binds (error `could not bind privileged source port`). App: flags `f: b d D n`, usage `usage: greyd-setup [-bDdn] [-f config]`, `-D` daemonizes via `privs.Daemonize`, `drop_privs = 0`, error `no lists configured in <file>` when `setup.lists` empty.
-- [ ] Tests: run against a fake greyd (`net.Listen` on loopback, collect frames) with two file-method lists (one gz, one plain) plus a whitelist: assert two frames with the collapsed CIDRs and the message; dryrun sends nothing; `-b` with dummy fw returns count.
-- [ ] Commit `Add greyd-setup`.
+- [x] Tests: run against a fake greyd (`net.Listen` on loopback, collect frames) with two file-method lists (one gz, one plain) plus a whitelist: assert two frames with the collapsed CIDRs and the message; dryrun sends nothing; `-b` with dummy fw returns count.
+- [x] Commit `Add greyd-setup`.
 
 ---
 
@@ -510,8 +510,8 @@ Port `main_greydb.c`: flags `a d t T D f: Y:`; list mode prints `GREY|...`, `WHI
 **Files:** `internal/app/greylogd/greylogd.go`, `greylogd_test.go`, `cmd/greylogd/main.go`
 
 Port `main_greylogd.c`: flags `d I W: Y: f: P: p:` (note the C getopt string omits `d`/`p` by mistake; the man page documents them, implement them), usage text, sync setup, user lookup, daemonize, pidfile (owned by grey user), `FW.StartLogCapture`, drop privs, loop: `CaptureLog` -> for each address `Begin; Get; new: first=pass=now; pcount++; expire=now+white_expiry; Put; Commit; Info("whitelisting %s"); Sync.White`. Shutdown on signals; `Info("exiting")`; `EndLogCapture`, close pidfile. Core loop factored as `processAddresses(store, addrs, now, whiteExp, syncer)` for tests.
-- [ ] Tests: `processAddresses` with the memory store creates and increments entries; a fake firewall returning two addresses then ctx cancel ends the loop.
-- [ ] Commit `Add greylogd`.
+- [x] Tests: `processAddresses` with the memory store creates and increments entries; a fake firewall returning two addresses then ctx cancel ends the loop.
+- [x] Commit `Add greylogd`.
 
 ---
 
@@ -520,8 +520,8 @@ Port `main_greylogd.c`: flags `d I W: Y: f: P: p:` (note the C getopt string omi
 **Files:** `adapters/fw/netfilter/netfilter_linux.go`, `caps_linux.go`, `nflog_linux.go`, `conntrack_linux.go`, `netfilter_other.go`, `netfilter_test.go`, GPL header
 
 Config: `max_elements` (200000), `hash_size` (1048576), `track_outbound` (1), `inbound_group` (155), `outbound_group` (255). `Open`: `netlink` ipset handle; when `drop_privs` keep caps (`cap.GetProc`, set CAP_NET_ADMIN permitted, `unix.Prctl(PR_SET_KEEPCAPS,1)`). `Replace`: raise effective CAP_NET_ADMIN; `IpsetCreate(stage, "hash:net", Options{Family, HashSize, MaxElements, Replace:true})`, add each CIDR (`IpsetAdd` with `netlink.IPSetEntry{IP, CIDR}`), create real set if missing, `IpsetSwap(set, stage)`, `IpsetDestroy(stage)`; return count. `StartLogCapture`: `nflog.Open(&nflog.Config{Group: in, Copymode: NfUlnlCopyPacket, Bufsize: 1024, Timeout: 1500})` and a second for out when tracking outbound; callback extracts source (in) or destination (out) IP from the IPv4/IPv6 header into a channel. `CaptureLog(ctx)`: drain channel with 10 s timeout. `LookupOrigDst`: `conntrack.Dial`, `Get` with a filter flow built from reply tuple (`src`↔`proxy`) and return original destination; default proxy on miss. `Close`: clear caps. Non-linux file registers nothing.
-- [ ] Tests: pure functions only (packet header parsing for v4/v6 payloads, CIDR entry conversion, config defaults), plus a root-gated test (`GREYD_TEST_ROOT=1`) that creates/replaces/destroys a set named `greyd-test`.
-- [ ] Commit `Add netfilter firewall adapter`.
+- [x] Tests: pure functions only (packet header parsing for v4/v6 payloads, CIDR entry conversion, config defaults), plus a root-gated test (`GREYD_TEST_ROOT=1`) that creates/replaces/destroys a set named `greyd-test`.
+- [x] Commit `Add netfilter firewall adapter`.
 
 ---
 
@@ -530,8 +530,8 @@ Config: `max_elements` (200000), `hash_size` (1048576), `track_outbound` (1), `i
 **Files:** `adapters/fw/pf/pf_bsd.go` (`//go:build openbsd || freebsd || netbsd || dragonfly`), `bpf_bsd.go`, `natlook_openbsd.go`, `natlook_freebsd.go`, `natlook_other_bsd.go` (netbsd, dragonfly -> proxy fallback), `pf_other.go`, `pf_test.go`, `pflog.go` (portable pflog header parser, tested everywhere)
 
 Config: `pfdev_path` (/dev/pf), `pfctl_path` (/sbin/pfctl), `pflog_if` (pflog0), `net_if`. `Replace`: `exec.Command(pfctl, "-p", pfdev, "-q", "-t", table, "-T", "replace", "-f", "-")` with CIDRs on stdin; 0 when list empty; error on non-zero exit. Log capture: open `/dev/bpf` (or `/dev/bpf0..9`), `unix.SetBpfInterface(fd, pflog_if)`, `SetBpfImmediate(fd, 1)`, read buffer, iterate `bpf_hdr` records, parse `pfloghdr` (length, af, action, dir, ifname) with `pflog.Parse`, accept `action == PF_PASS`, TCP, dst port 25, SYN without ACK, optional `net_if` match; collect src (in) or dst (out when `track_outbound`). NAT lookup: `DIOCNATLOOK` with the OpenBSD `pfioc_natlook` layout (saddr,daddr,rsaddr,rdaddr 16 bytes each; sport,dport,rsport,rdport u16; af,proto,proto_variant,direction u8) and the FreeBSD layout (same fields, no proto_variant); `unix.IoctlSetPointerInt` replaced by `unix.Syscall(SYS_IOCTL, fd, DIOCNATLOOK, ptr)`.
-- [ ] Tests: `pflog.Parse` on a hand-built header and IPv4 SYN packet returns the source address for `dir == PF_IN`, nothing for `action != PASS`, nothing for non-SYN; `GOOS=openbsd GOARCH=amd64 go vet ./adapters/fw/pf/` and `GOOS=freebsd ... go build ./...` succeed.
-- [ ] Commit `Add pf firewall adapter`.
+- [x] Tests: `pflog.Parse` on a hand-built header and IPv4 SYN packet returns the source address for `dir == PF_IN`, nothing for `action != PASS`, nothing for non-SYN; `GOOS=openbsd GOARCH=amd64 go vet ./adapters/fw/pf/` and `GOOS=freebsd ... go build ./...` succeed.
+- [x] Commit `Add pf firewall adapter`.
 
 ---
 
@@ -540,13 +540,13 @@ Config: `pfdev_path` (/dev/pf), `pfctl_path` (/sbin/pfctl), `pflog_if` (pflog0),
 **Files:** `README.md` (edited copy of `README`), `INSTALL` (new, Go instructions), `ChangeLog`, `NEWS`, `AUTHORS`, `doc/*.md` (edited), `doc/*.8 doc/*.5 doc/*.html` (regenerated when `ronn` exists, else copied and edited with the same text changes), `etc/greyd.conf.in`, `etc/greyd.docker.conf.in`, `etc/*-init.in` (copied), `packages/docker/Dockerfile` (multi-stage: `golang:1.25-alpine` build, `alpine` runtime, users greyd/greydb, `ENTRYPOINT ["/usr/local/sbin/greyd","-F"]`), `packages/rpm/greyd.spec.in` and `packages/debian/*` (Go build steps, no shared objects), `packages/greyd_pkg_sign_pub.asc`, `utils/spf_whitelist.pl`, `website/` (copied), Makefile `man`, `dist`, `docker` targets.
 
 Edits: driver documentation in `greyd.conf.5.md` (`driver = "netfilter"` / `"pf"` / `"dummy"`, `"sqlite"` / `"mysql"` / `"postgresql"` / `"bolt"` / `"memory"`; PostgreSQL section added with `host port name user pass socket`; note on legacy `.so` paths; bolt replaces Berkeley DB); `greyd.8.md` SPF section (built in, no configure flag); README development status, drivers list, docker, licensing (netfilter adapter GPL as before); sample config `driver` lines. `INSTALL`: requirements (Go 1.25, make, optional Java for `make generate`), `make`, `make test`, `make install`, users/dirs to create, chroot dir. `NEWS` entry dated 2026-09-06 describing the Go port and BDB replacement.
-- [ ] Verify with `make install DESTDIR=$(mktemp -d)` that files land where the C layout put them (`sbin/greyd`, `etc/greyd/greyd.conf`, `share/man/man8/greyd.8`).
-- [ ] Commit `Port documentation, sample configuration and packaging`.
+- [x] Verify with `make install DESTDIR=$(mktemp -d)` that files land where the C layout put them (`sbin/greyd`, `etc/greyd/greyd.conf`, `share/man/man8/greyd.8`).
+- [x] Commit `Port documentation, sample configuration and packaging`.
 
 ---
 
 ### Task 23: Final verification
 
-- [ ] `make fmt lint test` clean; `make test-race`; `CGO_ENABLED=0 GOOS=linux go build ./...`; `GOOS=openbsd go vet ./...` and `GOOS=freebsd go vet ./...`; `docker build -f packages/docker/Dockerfile .` when docker is available; `make test-db-docker` when docker is available.
-- [ ] Smoke run as an unprivileged user: `bin/greyd -F -f etc/greyd.test.conf` with `drop_privs = 0`, `chroot = 0`, `setrlimit = 0`, memory store, dummy firewall, `bind_address = 127.0.0.1`, `port = 18025`, `config_port = 18026`; `nc` an SMTP dialogue and check `bin/greydb -f etc/greyd.test.conf` output shows the GREY entry (use sqlite for this run so greydb sees the data).
-- [ ] Update `README.md` status section with anything left unverified (pf, netfilter on real hosts). Commit `Finalize greyd Go port`.
+- [x] `make fmt lint test` clean; `make test-race`; `CGO_ENABLED=0 GOOS=linux go build ./...`; `GOOS=openbsd go vet ./...` and `GOOS=freebsd go vet ./...`; `docker build -f packages/docker/Dockerfile .` when docker is available; `make test-db-docker` when docker is available.
+- [x] Smoke run as an unprivileged user: `bin/greyd -F -f etc/greyd.test.conf` with `drop_privs = 0`, `chroot = 0`, `setrlimit = 0`, memory store, dummy firewall, `bind_address = 127.0.0.1`, `port = 18025`, `config_port = 18026`; `nc` an SMTP dialogue and check `bin/greydb -f etc/greyd.test.conf` output shows the GREY entry (use sqlite for this run so greydb sees the data).
+- [x] Update `README.md` status section with anything left unverified (pf, netfilter on real hosts). Commit `Finalize greyd Go port`.

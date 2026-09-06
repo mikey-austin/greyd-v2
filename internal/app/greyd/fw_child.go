@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"os/user"
 	"sync"
 
 	"github.com/mikey-austin/greyd-golang/internal/config"
@@ -141,16 +142,22 @@ func driverIsPF(cfg *config.Config) bool {
 func dropMainPrivs(cfg *config.Config, skipChroot bool) error {
 	mainUser := cfg.Str("user", "", MainUser)
 	dropPrivs := cfg.Bool("drop_privs", "", true)
+
+	// The user database is not reachable from inside the jail, so the
+	// lookup must precede the chroot.
+	var u *user.User
+	if dropPrivs {
+		var err error
+		if u, err = privs.LookupUser(mainUser); err != nil {
+			return err
+		}
+	}
 	if !skipChroot && cfg.Bool("chroot", "", DefaultChroot == 1) {
 		if err := privs.Chroot(cfg.Str("chroot_dir", "", ChrootDir)); err != nil {
 			return err
 		}
 	}
 	if dropPrivs {
-		u, err := privs.LookupUser(mainUser)
-		if err != nil {
-			return err
-		}
 		if err := privs.Drop(u); err != nil {
 			return fmt.Errorf("failed to drop privileges: %w", err)
 		}

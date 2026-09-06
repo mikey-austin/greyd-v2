@@ -1,3 +1,5 @@
+//go:build !dragonfly
+
 /*
  * Copyright (c) 2014-2026 Mikey Austin <mikey@greyd.org>
  *

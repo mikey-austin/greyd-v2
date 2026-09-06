@@ -116,8 +116,25 @@ programs, configuration files, command line switches, wire protocols and sync pr
 is a drop-in replacement. The following points remain to be done:
   * the **netfilter** and **pf** firewall drivers have been ported but still need verification
     on real hosts (the port was developed without root access to a suitable kernel)
-  * the **npf** (NetBSD) firewall driver has not yet been ported
+  * the **npf** (NetBSD) firewall driver has not yet been ported; on NetBSD the **pf** driver
+    falls back to the proxy address for original destination lookups
+  * the **sqlite** driver is not available on DragonFly BSD (the embedded SQLite has no port
+    for it); use **bolt** there
   * more testing in the wild on different setups
+
+The port fixes a few defects of the C implementation on purpose, so behaviour differs in
+these corners:
+
+  * `hostname` set in **greyd.conf** is honoured (the C daemon always used the system host name
+    unless **-h** was given)
+  * `low_prio_mx` is read from the *grey* section as documented (and the **-M** switch works);
+    a value in the default section is still accepted
+  * when the proxy protocol is enabled, blacklists are matched against the real client address
+    from the PROXY header rather than the load balancer's address
+  * the greylister does not whitelist a retried tuple whose address already has a whitelist
+    entry, for every database driver (the SQL drivers already behaved this way)
+  * a malformed message on an internal pipe or the configuration socket is logged and skipped
+    instead of terminating the process
 
 Licensing
 ---------

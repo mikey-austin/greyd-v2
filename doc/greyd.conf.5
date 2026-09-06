@@ -239,7 +239,7 @@ The \fI\-\-nflog\-group\fR to indicate inbound SMTP connections\.
 The \fI\-\-nflog\-group\fR to indicate outbound SMTP connections\.
 .
 .SS "PF firewall driver"
-This driver runs on BSD systems making use of the PF firewall\. The driver makes use of \fIlibpcap\fR\.
+This driver runs on BSD systems making use of the PF firewall\. Tables are replaced through \fIpfctl\fR, logged packets are read directly from the \fIbpf\fR device attached to the \fIpflog\fR interface, and original destination lookups use the \fIDIOCNATLOOK\fR ioctl (OpenBSD, FreeBSD and DragonFly BSD; on NetBSD the proxy address is returned)\.
 .
 .TP
 \fBpfdev_path\fR = \fIstring\fR

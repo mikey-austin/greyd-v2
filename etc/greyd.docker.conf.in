@@ -10,6 +10,11 @@ verbose = 1
 daemonize = 0
 
 #
+# Containers log to stdout; there is no syslog daemon.
+#
+syslog_enable = 0
+
+#
 # Main daemon user to drop privileges to.
 #
 user = "greyd"

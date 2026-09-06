@@ -23,5 +23,4 @@ import (
 	_ "github.com/mikey-austin/greyd-golang/adapters/db/memory"
 	_ "github.com/mikey-austin/greyd-golang/adapters/db/mysql"
 	_ "github.com/mikey-austin/greyd-golang/adapters/db/postgresql"
-	_ "github.com/mikey-austin/greyd-golang/adapters/db/sqlite"
 )

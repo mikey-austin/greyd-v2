@@ -1,3 +1,5 @@
+//go:build !(openbsd || freebsd || netbsd || dragonfly)
+
 /*
  * Copyright (c) 2014-2026 Mikey Austin <mikey@greyd.org>
  *
@@ -14,11 +16,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-// Package all registers every firewall driver. Programs blank-import it.
-package all
-
-import (
-	_ "github.com/mikey-austin/greyd-golang/adapters/fw/dummy"
-	_ "github.com/mikey-austin/greyd-golang/adapters/fw/netfilter"
-	_ "github.com/mikey-austin/greyd-golang/adapters/fw/pf"
-)
+// On systems without PF this package only provides the portable pflog
+// record parser; no firewall driver is registered.
+package pf

@@ -15,6 +15,13 @@
         netfilter driver now uses netlink directly for ipset, conntrack and
         NFLOG instead of the libnetfilter userland libraries.
 
+        A few defects of the C code were fixed along the way: the hostname
+        from greyd.conf is used, low_prio_mx is read from the grey section
+        (so -M works), proxied connections are matched against the real
+        client address, and internal parse errors no longer kill a process.
+        The netfilter and pf drivers could not be exercised on real hosts
+        during the port and need field verification.
+
 2015-06-08
         greyd now sports sync compatibility with spamd.
 

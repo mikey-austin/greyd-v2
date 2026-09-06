@@ -199,7 +199,7 @@ CIDRs.</p></dd>
 
 <h3 id="PF-firewall-driver">PF firewall driver</h3>
 
-<p>This driver runs on BSD systems making use of the PF firewall. The driver makes use of <em>libpcap</em>.</p>
+<p>This driver runs on BSD systems making use of the PF firewall. Tables are replaced through <em>pfctl</em>, logged packets are read directly from the <em>bpf</em> device attached to the <em>pflog</em> interface, and original destination lookups use the <em>DIOCNATLOOK</em> ioctl (OpenBSD, FreeBSD and DragonFly BSD; on NetBSD the proxy address is returned).</p>
 
 <dl>
 <dt><strong>pfdev_path</strong> = <em>string</em></dt><dd><p>Path to pfdev, defaults to <em>/dev/pf</em>.</p></dd>
