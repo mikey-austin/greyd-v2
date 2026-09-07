@@ -278,3 +278,23 @@ The script dumps `greyd.log`, stderr, the `greydb` listing, `pfctl -sr`,
 - `run-openbsd.sh`: OpenBSD smoke test (POSIX sh, uses `nc`).
 - `integration.mk`: `test-integration`, `test-integration-image`,
   `test-integration-host`, `vet-openbsd` (included from the top-level Makefile).
+
+## spamd sync compatibility (OpenBSD)
+
+`run-openbsd-sync.sh` runs the `spamd(8)` shipped with OpenBSD next to greyd
+on loopback, each sending synchronisation messages to the other with a
+shared `/etc/mail/spamd.key`, and asserts that:
+
+- a greylisted dialogue against greyd appears in `spamdb` as a GREY entry;
+- `greydb -Y` pushes WHITE and TRAPPED entries that `spamdb` lists;
+- a greylisted dialogue against spamd appears in `greydb`;
+- both daemons survive and greyd exits cleanly.
+
+spamd binds the sync port on the wildcard address (`-y lo0`), greyd on the
+loopback alias 127.0.0.2; both set SO_REUSEADDR, so the two sockets share
+port 8025/udp. spamd's SMTP listener is moved to 18025 with `-p`.
+
+    # sh packages/integration/run-openbsd-sync.sh
+
+The CI job runs it after the pf smoke test. On failure the script dumps
+both databases, both logs and the bound sockets.

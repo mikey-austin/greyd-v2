@@ -14,8 +14,9 @@ jobs:
       - name: integration harness (privileged docker)
         run: make test-integration
 
-  # Vet, the whole test tree (pf adapter, pledge sandbox) and a pf/pledge
-  # smoke test in an OpenBSD VM; see packages/integration/run-openbsd.sh.
+  # Vet, the whole test tree (pf adapter, pledge sandbox), a pf/pledge smoke
+  # test and the sync protocol compatibility test against the spamd of the
+  # OpenBSD base system; see packages/integration/run-openbsd*.sh.
   # The OpenBSD job is informational until it has been seen green on real
   # hardware: it cannot be exercised by the developers and a failure here
   # must not mask the Linux results. Remove continue-on-error once it
@@ -61,3 +62,5 @@ jobs:
             go test ./...
             echo "== pf / pledge smoke test"
             sh packages/integration/run-openbsd.sh
+            echo "== spamd sync compatibility"
+            sh packages/integration/run-openbsd-sync.sh

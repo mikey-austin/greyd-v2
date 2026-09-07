@@ -21,10 +21,16 @@ func TestListeners(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	// Move the descriptor to 3 the way a service manager would.
-	if err := dup2(int(f.Fd()), firstFD); err != nil {
-		t.Skipf("cannot place descriptor 3: %v", err)
+	// Place the descriptor where the protocol expects the first one. The
+	// test process cannot use 3 (go test keeps its log there), so the
+	// package's notion of the first descriptor is moved for the test.
+	const testFD = 200
+	if err := dup2(int(f.Fd()), testFD); err != nil {
+		t.Skipf("cannot place descriptor %d: %v", testFD, err)
 	}
+	old := firstFD
+	firstFD = testFD
+	t.Cleanup(func() { firstFD = old })
 	t.Setenv("LISTEN_PID", strconv.Itoa(os.Getpid()))
 	t.Setenv("LISTEN_FDS", "1")
 	t.Setenv("LISTEN_FDNAMES", "smtp")

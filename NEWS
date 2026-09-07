@@ -30,7 +30,9 @@
         DNS and its database server. Packages (deb, rpm), signed release
         archives with SBOMs, a coverage gate, Dependabot, an architecture
         document and an end to end integration harness (Linux container
-        and OpenBSD VM) round out the tooling. The harness found and fixed
+        and OpenBSD VM, including a sync protocol compatibility test
+        against the spamd of the OpenBSD base system) round out the
+        tooling. The harness found and fixed
         three defects of the port: the netfilter firewall process crashed
         after dropping privileges (keep-caps was set on one thread only,
         and the capability set was narrowed before the drop), multi-line

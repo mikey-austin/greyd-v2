@@ -35,7 +35,9 @@ type Listener struct {
 	net.Listener
 }
 
-const firstFD = 3
+// firstFD is where the protocol places the first descriptor. Tests move
+// it, since descriptor 3 belongs to the test runner in their process.
+var firstFD = 3
 
 // Listeners returns the activated sockets addressed to this process and
 // clears the environment so children do not inherit the protocol. The
