@@ -290,9 +290,11 @@ shared `/etc/mail/spamd.key`, and asserts that:
 - a greylisted dialogue against spamd appears in `greydb`;
 - both daemons survive and greyd exits cleanly.
 
-spamd binds the sync port on the wildcard address (`-y lo0`), greyd on the
-loopback alias 127.0.0.2; both set SO_REUSEADDR, so the two sockets share
-port 8025/udp. spamd's SMTP listener is moved to 18025 with `-p`.
+spamd receives sync on the loopback alias 127.0.0.3 (`-y 127.0.0.3`) and
+greyd on 127.0.0.2, both on port 8025/udp. spamd cannot be given `-y lo0`
+here: in interface mode it drops packets whose source is the interface's
+own address, which on a single host is every packet. spamd's SMTP listener
+is moved to 18025 with `-p`.
 
     # sh packages/integration/run-openbsd-sync.sh
 

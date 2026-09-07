@@ -317,10 +317,11 @@ pass "ipfw table $WHITELIST_TABLE lists $PRELOAD_WHITE (swapped in by the firewa
 # --- 9. greylogd -------------------------------------------------------------
 
 step "greylogd whitelists the source of a logged SYN to port 25"
-"$BIN/greylogd" -f "$CONF" >"$LOGDIR/greylogd.stderr" 2>&1
-GREYLOGD_PID=$(cat "$RUNDIR/greylogd.pid" 2>/dev/null || true)
+# daemonize = 0 in the shared configuration keeps greylogd in the
+# foreground, so it is backgrounded here.
+"$BIN/greylogd" -f "$CONF" >"$LOGDIR/greylogd.stderr" 2>&1 &
+GREYLOGD_PID=$!
 wait_for "greylogd pidfile" test -s "$RUNDIR/greylogd.pid" || die "greylogd did not write its pidfile"
-GREYLOGD_PID=$(cat "$RUNDIR/greylogd.pid")
 wait_for "greylogd listening" log_has "listening direction" || die "greylogd did not start"
 # Nothing listens on 25: the SYN is logged by the count rule and answered
 # with a reset, which is all greylogd needs.

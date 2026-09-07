@@ -12,10 +12,11 @@
 #   spamd -> greyd : a greylisted dialogue against spamd shows up in greydb.
 #
 # Both sides authenticate with the same key file (/etc/mail/spamd.key), so
-# the HMAC layout is exercised too. spamd listens on 127.0.0.1 (sync port
-# 8025/udp, SMTP 18025), greyd on the loopback alias 127.0.0.2 (sync
-# 8025/udp, SMTP 8025); both sockets set SO_REUSEADDR, which is what lets a
-# specific address coexist with spamd's wildcard bind on the same port.
+# the HMAC layout is exercised too. spamd serves SMTP on 127.0.0.1:18025
+# and receives sync on the loopback alias 127.0.0.3 (-y with an address:
+# in interface mode, -y lo0, spamd silently drops packets whose source is
+# the interface's own address, which on one host is every packet); greyd
+# serves SMTP on 127.0.0.2:8025 and receives sync on 127.0.0.2:8025.
 #
 # Run as root on OpenBSD with Go on the PATH:
 #
@@ -45,6 +46,7 @@ SPAMDB=${SPAMDB:-/usr/sbin/spamdb}
 
 GREYD_ADDR=127.0.0.2
 SPAMD_ADDR=127.0.0.1
+SPAMD_SYNC_ADDR=127.0.0.3
 GREYD_SMTP=8025
 SPAMD_SMTP=18025
 WHITE_IP=10.77.0.1
@@ -52,7 +54,7 @@ TRAP_IP=10.77.0.3
 
 GREYD_PID=
 SPAMD_PID=
-ALIAS_ADDED=0
+ALIASES=
 KEY_CREATED=0
 STEP=0
 
@@ -128,7 +130,7 @@ cleanup() {
         fi
     done
     pkill -x spamd 2>/dev/null || true
-    [ "$ALIAS_ADDED" -eq 1 ] && ifconfig lo0 "$GREYD_ADDR" delete 2>/dev/null || true
+    for a in $ALIASES; do ifconfig lo0 "$a" delete 2>/dev/null || true; done
     [ "$KEY_CREATED" -eq 1 ] && rm -f "$KEY"
     rm -f "$SOCK"
     exit "$rc"
@@ -185,10 +187,12 @@ fi
 # as by spamd (root).
 chmod 0644 "$KEY"
 
-if ! ifconfig lo0 | grep -q "inet $GREYD_ADDR "; then
-    ifconfig lo0 alias "$GREYD_ADDR" netmask 255.255.255.255
-    ALIAS_ADDED=1
-fi
+for a in $GREYD_ADDR $SPAMD_SYNC_ADDR; do
+    if ! ifconfig lo0 | grep -q "inet $a "; then
+        ifconfig lo0 alias "$a" netmask 255.255.255.255
+        ALIASES="$ALIASES $a"
+    fi
+done
 
 # spamdb keeps state in /var/db/spamd across runs: start from a clean slate.
 for ip in $WHITE_IP $TRAP_IP; do "$SPAMDB" -d "$ip" 2>/dev/null || true; done
@@ -237,7 +241,7 @@ section spf {
 
 section sync {
     enable       = 1
-    hosts        = [ "$SPAMD_ADDR" ]
+    hosts        = [ "$SPAMD_SYNC_ADDR" ]
     bind_address = "$GREYD_ADDR"
     port         = 8025
     verify       = 1
@@ -245,33 +249,33 @@ section sync {
 }
 EOF
 "$BIN/greyd" -t -f "$CONF" || die "greyd rejected the configuration"
-pass "key $KEY shared, alias $GREYD_ADDR on lo0, configuration accepted"
+pass "key $KEY shared, aliases $GREYD_ADDR and $SPAMD_SYNC_ADDR on lo0, configuration accepted"
 
 # --- 4. spamd ----------------------------------------------------------------
 
-step "start spamd (greylisting, -y lo0 -Y $GREYD_ADDR, SMTP on $SPAMD_ADDR:$SPAMD_SMTP)"
+step "start spamd (greylisting, -y $SPAMD_SYNC_ADDR -Y $GREYD_ADDR, SMTP on $SPAMD_ADDR:$SPAMD_SMTP)"
 # -d keeps spamd in the foreground; -S 0 disables the stutter for greylisted
 # connections so the dialogue completes quickly; -G shortens the times.
-"$SPAMD" -d -G 2:4:864 -S 0 -l "$SPAMD_ADDR" -p "$SPAMD_SMTP" -y lo0 -Y "$GREYD_ADDR" -n "spamd sync test" \
+"$SPAMD" -d -G 2:4:864 -S 0 -l "$SPAMD_ADDR" -p "$SPAMD_SMTP" -y "$SPAMD_SYNC_ADDR" -Y "$GREYD_ADDR" -n "spamd sync test" \
     >"$LOGDIR/spamd.out" 2>&1 &
 SPAMD_PID=$!
 wait_for "spamd SMTP listener" sh -c "netstat -an -f inet | grep -q '$SPAMD_ADDR.$SPAMD_SMTP.*LISTEN'" \
     || die "spamd did not start listening"
-netstat -an -f inet | grep -q "\.8025 " || die "spamd sync socket (8025/udp) not bound"
+netstat -an -f inet | grep -q "$SPAMD_SYNC_ADDR\.8025 " || die "spamd sync socket ($SPAMD_SYNC_ADDR:8025/udp) not bound"
 is_alive "$SPAMD_PID" || die "spamd exited right after start"
 pass "spamd running (pid $SPAMD_PID), sync socket bound"
 
 # --- 5. greyd ----------------------------------------------------------------
 
-step "start greyd (sync hosts = [$SPAMD_ADDR], bind_address = $GREYD_ADDR)"
+step "start greyd (sync hosts = [$SPAMD_SYNC_ADDR], bind_address = $GREYD_ADDR)"
 "$BIN/greyd" -F -f "$CONF" >"$LOGDIR/greyd-sync.stderr" 2>&1 &
 GREYD_PID=$!
 wait_for "greyd listening" grep -q "listening for incoming connections" "$LOG" \
     || die "greyd did not start listening (alive: $(is_alive "$GREYD_PID" && echo yes || echo no))"
 is_alive "$GREYD_PID" || die "greyd exited right after start"
-grep -q "added spam sync host" "$LOG" || die "greyd did not register $SPAMD_ADDR as a sync target"
+grep -q "added spam sync host" "$LOG" || die "greyd did not register $SPAMD_SYNC_ADDR as a sync target"
 grep -q "no sync key loaded" "$LOG" && die "greyd did not load the sync key"
-pass "greyd up, sending to $SPAMD_ADDR and receiving on $GREYD_ADDR"
+pass "greyd up, sending to $SPAMD_SYNC_ADDR and receiving on $GREYD_ADDR"
 
 # --- 6. greyd -> spamd: grey entry ------------------------------------------
 
@@ -287,8 +291,8 @@ pass "spamdb lists GREY|...|g2s.example.test|... sent by greyd"
 # --- 7. greyd -> spamd: white and trapped via greydb -Y ----------------------
 
 step "greyd -> spamd: greydb -Y pushes WHITE and TRAPPED entries"
-run_greydb -Y "$SPAMD_ADDR" -a "$WHITE_IP" || die "greydb -a $WHITE_IP failed"
-run_greydb -Y "$SPAMD_ADDR" -t -a "$TRAP_IP" || die "greydb -t -a $TRAP_IP failed"
+run_greydb -Y "$SPAMD_SYNC_ADDR" -a "$WHITE_IP" || die "greydb -a $WHITE_IP failed"
+run_greydb -Y "$SPAMD_SYNC_ADDR" -t -a "$TRAP_IP" || die "greydb -t -a $TRAP_IP failed"
 wait_for "WHITE in spamdb" spamdb_has "WHITE|$WHITE_IP|" || die "spamd did not receive WHITE|$WHITE_IP"
 wait_for "TRAPPED in spamdb" spamdb_has "TRAPPED|$TRAP_IP|" || die "spamd did not receive TRAPPED|$TRAP_IP"
 pass "spamdb lists WHITE|$WHITE_IP and TRAPPED|$TRAP_IP"
