@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>greyd(8) - greyd</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="greyd - a greylisting and blacklisting spam deferral daemon, a Go port of OpenBSD spamd.">
+<link rel="stylesheet" href="../css/screen.css">
+<script defer src="../js/site.js"></script>
+</head>
+<body>
+<header class="group">
+<h1 class="logo"><a href="../index.html">grey<span>d</span></a></h1>
+<a class="menuControl expand" href="#">+</a>
+<a class="menuControl collapse" href="#">-</a>
+<nav><ul><li><a href="../index.html">home</a></li><li class="active"><a href="../docs.html">docs</a></li><li><a href="../downloads.html">downloads</a></li><li><a href="../code.html">code</a></li></ul></nav>
+</header>
+<main>
+<section><div class="content manpage"><h1>greyd(8)</h1><p class="tagline">spam deferral daemon</p>
+<h2>SYNOPSIS</h2>
+<p><code>greyd</code> [<strong>-456bdvF</strong>] [<strong>-f</strong> config] [<strong>-B</strong> maxblack] [<strong>-c</strong> maxcon] [<strong>-G</strong> passtime:greyexp:whiteexp] [<strong>-h</strong> hostname] [<strong>-l</strong> address] [<strong>-L</strong> address] [<strong>-M</strong> address] [<strong>-n</strong> name] [<strong>-p</strong> port] [<strong>-P</strong> pidfile] [<strong>-S</strong> secs] [<strong>-s</strong> secs] [<strong>-w</strong> window] [<strong>-Y</strong> synctarget] [<strong>-y</strong> synclisten] [<strong>-t</strong>] [<strong>--drivers</strong>] [<strong>--stats</strong>] [<strong>--sandbox-probe</strong> role] [<strong>--version</strong>]</p>
+<h2>DESCRIPTION</h2>
+<p><strong>greyd</strong> is a fake mail daemon which rejects false mail. It is designed to be very efficient so that it does not slow down the receiving machine.</p>
+<p><strong>greyd</strong> considers sending hosts to be of three types:</p>
+<ul><li><em>blacklisted</em> hosts are redirected to <strong>greyd</strong> and tarpitted i.e. they are communicated with very slowly to consume the sender&#x27;s resources. Mail is rejected with either a 450 or 550 error message. A blacklisted host will not be allowed to talk to a real mail server.</li><li><em>whitelisted</em> hosts do not talk to <strong>greyd</strong>. Their connections are instead sent to a real mail server.</li><li><em>greylisted</em> hosts are redirected to <strong>greyd</strong>, but <strong>greyd</strong> has not yet decided if they are likely spammers. They are given a temporary failure message by <strong>greyd</strong> when they try to deliver mail.</li></ul>
+<p>When <strong>greyd</strong> is run in default mode, it will greylist connections from new hosts. Depending on its configuration, it may choose to blacklist the host or, if the checks described below are met, eventually whitelist it. When <strong>greyd</strong> is run in blacklist-only mode, using the -b flag, it will consult a pre-defined set of blacklist addresses to decide whether to tarpit the host or not.</p>
+<p>When a sending host talks to <strong>greyd</strong>, the reply will be stuttered. That is, the response will be sent back a character at a time, slowly. For blacklisted hosts, the entire dialogue is stuttered. For greylisted hosts, the default is to stutter for the first 10 seconds of dialogue only.</p>
+<p>The options are as follows (all of which may be specified in <strong>greyd.conf</strong>(5)):</p>
+<ul><li><strong>-4</strong>:</li></ul>
+<p>For blacklisted entries, return error code 450 to the spammer (default).</p>
+<ul><li><strong>-5</strong>:</li></ul>
+<p>For blacklisted entries, return error code 550 to the spammer.</p>
+<ul><li><strong>-6</strong>:</li></ul>
+<p>Enable IPv6. This is disabled by default.</p>
+<ul><li><strong>-f</strong> <em>config</em>:</li></ul>
+<p>The main greyd configuration file.</p>
+<ul><li><strong>-B</strong> <em>maxblack</em>:</li></ul>
+<p>The maximum number of concurrent blacklisted connections to stutter at. This value may not be greater than <em>maxcon</em> (see below). The default is maxcon - 100. When this value is exceeded new blacklisted connections will not be stuttered at.</p>
+<ul><li><strong>-b</strong>:</li></ul>
+<p>Run in blacklist-only mode.</p>
+<ul><li><strong>-c</strong> <em>maxcon</em>:</li></ul>
+<p>The maximum number of concurrent connections to allow. maxcon may not exceed the kernel&#x27;s maximum number of open files - 200, and defaults to 800.</p>
+<ul><li><strong>-d</strong>:</li></ul>
+<p>Debug mode in which debug log messages will not be suppressed.</p>
+<ul><li><strong>-G</strong> <em>passtime:greyexp:whiteexp</em>:</li></ul>
+<p>Adjust the three time parameters for greylisting. <em>passtime</em> defaults to 25 (minutes), <em>greyexp</em> to 4 (hours), and <em>whiteexp</em> to 864 (hours, approximately 36 days).</p>
+<ul><li><strong>-h</strong> <em>hostname</em>:</li></ul>
+<p>The hostname that is reported in the SMTP banner.</p>
+<ul><li><strong>-l</strong> <em>address</em>:</li></ul>
+<p>Specify the local address to which <strong>greyd</strong> is to bind. By default <strong>greyd</strong> listens on all local addresses.</p>
+<ul><li><strong>-L</strong> <em>address</em>:</li></ul>
+<p>Specify the local IPv6 address to which <strong>greyd</strong> is to bind. By default <strong>greyd</strong> listens on all local IPv6 addresses. Note, IPv6 must be enabled for this to have any effect.</p>
+<ul><li><strong>-M</strong> <em>address</em>:</li></ul>
+<p>Specify a local IP address which is listed as a low priority MX record, used to identify and trap hosts that connect to MX hosts out of order. See GREYTRAPPING below for details.</p>
+<ul><li><strong>-n</strong> <em>name</em>:</li></ul>
+<p>The SMTP version banner that is reported upon initial connection.</p>
+<ul><li><strong>-p</strong> <em>port</em>:</li></ul>
+<p>Specify a different port number from the default port that <strong>greyd</strong> should listen for redirected SMTP connections on.</p>
+<ul><li><strong>-P</strong> <em>pidfile</em>:</li></ul>
+<p>Specify the location for the pidfile.</p>
+<ul><li><strong>-S</strong> <em>secs</em>:</li></ul>
+<p>Stutter at greylisted connections for the specified amount of seconds, after which the connection is not stuttered at. The default is 10; maximum is 90.</p>
+<ul><li><strong>-s</strong> <em>secs</em>:</li></ul>
+<p>Delay each character sent to the client by the specified amount of seconds. The default is 1; maximum is 10.</p>
+<ul><li><strong>-v</strong>:</li></ul>
+<p>Enable verbose logging. By default <strong>greyd</strong> logs connections, disconnections and blacklist matches to syslog at <em>LOG_INFO</em> level. With verbose logging enabled, message detail including subject and recipient information is logged at <em>LOG_INFO</em>, along with the message body and SMTP dialogue being logged at <em>LOG_DEBUG</em> level.</p>
+<ul><li><strong>-F</strong>:</li></ul>
+<p>Run <strong>greyd</strong> in the foreground, ie don&#x27;t daemonize.</p>
+<ul><li><strong>-w</strong> <em>window</em>:</li></ul>
+<p>Set the socket receive buffer to this many bytes, adjusting the window size.</p>
+<ul><li><strong>-Y</strong> <em>synctarget</em>:</li></ul>
+<p>Add target <em>synctarget</em> to receive synchronisation messages. synctarget can be either an IPv4 address for unicast messages or a network interface and optional TTL value for multicast messages to the group 224.0.1.241. If the multicast TTL is not specified, a default value of 1 is used. This option can be specified multiple times. If a network interface is specified, it must match the interface specified by the <strong>-y</strong> option. See also SYNCHRONISATION below.</p>
+<ul><li><strong>-y</strong> <em>synclisten</em>:</li></ul>
+<p>Listen on <em>synclisten</em> network interface for incoming synchronisation messages. This option can be specified only once. See also SYNCHRONISATION below.</p>
+<ul><li><strong>-t</strong>:</li></ul>
+<p>Test the configuration: load <strong>greyd.conf</strong>(5) together with the other switches, print any warnings (such as unknown variables) and whether the configured drivers are available, then exit. The exit status is non-zero when the configuration is not usable.</p>
+<ul><li><strong>--drivers</strong>:</li></ul>
+<p>Print the compiled-in database and firewall drivers and exit.</p>
+<ul><li><strong>--stats</strong>:</li></ul>
+<p>Print the counters of the running <strong>greyd</strong> (connections, rejections, blacklist and database entry counts) by querying it over the configuration socket, then exit. This needs the same access as <strong>greyd-setup</strong>(8): the <em>config_socket</em> as root or the <strong>greyd</strong> user, or root for the TCP configuration port. <strong>greyd-monitor</strong>(8) exports the same counters to Prometheus.</p>
+<ul><li><strong>--sandbox-probe</strong> <em>role</em>:</li></ul>
+<p>Apply the sandbox profile of the named process role (<em>main</em>, <em>firewall</em> or <em>grey</em>) to this throwaway process and print, one per line, whether the kernel then allows or denies a set of operations a confined process must not perform (reading <em>/etc/passwd</em>, listing <em>/</em>, writing to the temporary directory, starting a program, connecting and binding TCP, mounting, chrooting, becoming root). Used by the integration tests to prove enforcement on the running kernel; exits non-zero when the profile cannot be applied.</p>
+<ul><li><strong>--version</strong>:</li></ul>
+<p>Print the version and exit.</p>
+<p>When run in default mode, connections receive the pleasantly innocuous temporary failure of:</p>
+<pre><code>451 Temporary failure, please try again later.</code></pre>
+<p>This happens in the SMTP dialogue immediately after the DATA command is received from the client.  <strong>greyd</strong> will use the configured <em>database driver</em> to track these connections to <strong>greyd</strong> by connecting IP address, HELO/EHLO, envelope-from, and envelope-to, or tuple for short.</p>
+<p>A previously unseen tuple is added to the database, recording the time an initial connection attempt was seen. After <em>passtime</em> minutes if <strong>greyd</strong> sees a retried attempt to deliver mail for the same tuple, <strong>greyd</strong> will whitelist the connecting address by adding it as a whitelist entry to the database, and removing the corresponding grey entry.</p>
+<p><strong>greyd</strong> regularly scans the database and configures all whitelist addresses via the configured <em>firewall driver</em>, allowing connections to pass to the real MTA. Any addresses not found in the firewall&#x27;s set management (eg Netfilter IPSets, PF tables, etc.) are redirected to <strong>greyd</strong>.</p>
+<p>An example iptables fragment (for use with the <em>netfilter</em> driver) is given below. In the example, the <em>IPSet</em> <em>greyd-whitelist</em> contains the hosts who should be passed directly to the SMTP agent (thus bypassing <strong>greyd</strong>).</p>
+<pre><code># iptables -t nat -A PREROUTING -p tcp --dport smtp -m set --match-set greyd-whitelist src -j ACCEPT
+# iptables -t nat -A PREROUTING -p tcp --dport smtp -j DNAT --to-destination 127.0.0.1:8025
+# iptables -t filter -A INPUT -p tcp --dport smtp -j ACCEPT
+# iptables -t filter -A INPUT -p tcp --dport 8025 -d 127.0.0.1 -j ACCEPT</code></pre>
+<p>Linux kernels by default do not allow routing packets from an external facing network interface to localhost (as used in the above example). To enable this, use the following (update your network interface accordingly):</p>
+<pre><code># sysctl net.ipv4.conf.eth0.route_localnet=1</code></pre>
+<p><strong>greyd</strong> removes tuple entries from the database if delivery has not been retried within <em>greyexp</em> hours from the initial time a connection is seen. The default is 4 hours as this is the most common setting after which MTAs will give up attempting to retry delivery of a message.</p>
+<p><strong>greyd</strong> removes whitelist entries from the database if no mail delivery activity has been seen from the whitelisted address by <strong>greylogd</strong>(8) within <em>whiteexp</em> hours from the initial time an address is whitelisted. The default is 36 days to allow for the delivery of monthly mailing list digests without greylist delays every time.</p>
+<p><strong>greyd-setup</strong>(8) should be run periodically by cron to fetch and configure blacklists in <strong>greyd</strong>. When run in blacklist-only mode, the -b flag should be specified. Below is an example crontab entry to run at 5 minutes past every hour:</p>
+<pre><code>05 * * * * /usr/sbin/greyd-setup -f /etc/greyd/greyd.conf</code></pre>
+<p><strong>greylogd</strong>(8) should be used to update the whitelist entries in the configured database when connections are seen to pass to the real MTA on the smtp port.</p>
+<p><strong>greydb</strong>(8) can be used to examine and alter the contents of the configured database. See <strong>greydb</strong>(8) for further information.</p>
+<p><strong>greyd</strong> sends log messages to syslog using facility daemon and, with increasing verbosity, level err, warn, info, and debug. The following rsyslog section can be used to log connection details to a dedicated file:</p>
+<pre><code>if $programname startswith &#x27;grey&#x27; then /var/log/greyd.log
+&amp;~</code></pre>
+<p>A typical entry shows the time of the connection and the IP address of the connecting host. When a host connects, the total number of active connections and the number of connections from blacklisted hosts is shown (connected (xx/xx)). When a host disconnects, the amount of time spent talking to <strong>greyd</strong> is shown.</p>
+<h2>GREYTRAPPING</h2>
+<p>When running <strong>greyd</strong> in default mode, it may be useful to define spamtrap destination addresses to catch spammers as they send mail from greylisted hosts. Such spamtrap addresses affect only greylisted connections to <strong>greyd</strong> and are used to temporarily blacklist a host that is obviously sending spam. Unused email addresses or email addresses on spammers&#x27; lists are very useful for this. When a host that is currently greylisted attempts to send mail to a spamtrap address, it is blacklisted for 24 hours by adding the host to the <strong>greyd</strong> blacklist ⟨<em>greyd-greytrap</em>⟩. Spamtrap addresses are added to the database with the following <strong>greydb</strong>(8) command:</p>
+<pre><code># greydb -T -a &#x27;spamtrap@greyd.org&#x27;</code></pre>
+<p>See <strong>greydb</strong>(8) for further details.</p>
+<p>A file configured with <em>permitted_domains</em> in the <em>grey</em> section of <em>greyd.conf</em> can be used to specify a list of domain name suffixes, one per line, one of which must match each destination email address in the greylist. Any destination address which does not match one of the suffixes listed in <em>permitted_domains</em> will be trapped, exactly as if it were sent to a spamtrap address. Comment lines beginning with &#x27;#&#x27; and empty lines are ignored. A sample <em>greyd.conf</em> configuration may be (see <strong>greyd.conf</strong>(5) for further details):</p>
+<pre><code>section grey {
+    permitted_domains = &quot;/etc/greyd/permitted_domains&quot;
+    db_permitted_domains = 1
+    ...
+}</code></pre>
+<p>For example, if the <em>/etc/greyd/permitted_domains</em> configured above or the database (ie DOMAIN entries managed via <strong>greydb</strong>(8)) contains:</p>
+<ul><li>@greyd.org</li><li>obtuse.com</li></ul>
+<p>The following destination addresses would not cause the sending host to be trapped:</p>
+<ul><li>beardedclams@greyd.org</li><li>stacy@obtuse.com</li><li>stacy@snouts.obtuse.com</li></ul>
+<p>However the following addresses would cause the sending host to be trapped:</p>
+<ul><li>peter@bugs.greyd.org</li><li>bigbutts@bofh.ucs.ualberta.ca</li></ul>
+<p>If the <em>db_permitted_domains</em> is set then the database is also searched for matching permitted domains, in addition (or in place of) the <em>permitted_domains</em>. Database permitted domains are added to the database with the following <strong>greydb</strong>(8) command:</p>
+<pre><code># greydb -D -a &#x27;@greyd.org&#x27;</code></pre>
+<p>See <strong>greydb</strong>(8) for further details.</p>
+<p>A low priority MX IP address may be specified with the -M option. When <strong>greyd</strong> has such an address specified, no host may enter new greylist tuples when connecting to this address; only existing entries may be updated. Any host attempting to make new deliveries to the low priority MX for which a tuple has not previously been seen will be trapped.</p>
+<p>Note that it is important to ensure that a host running <strong>greyd</strong> with the low priority MX address active must see all the greylist changes for a higher priority MX host for the same domains. This is best done by the host itself receiving the connections to the higher priority MX on another IP address (which may be an IP alias). This will ensure that hosts are not trapped erroneously if the higher priority MX is unavailable. For example, on a host which is an existing MX record for a domain of value 10, a second IP address with MX of value 99 (a higher number, and therefore lower priority) would ensure that any RFC conformant client would attempt delivery to the IP address with the MX value of 10 first, and should not attempt to deliver to the address with MX value 99.</p>
+<h2>SPF VALIDATION</h2>
+<p>This module makes use of a pure Go SPF implementation for the validation of grey entries, and can be configured to whitelist SPF validated hosts in addition to the default trapping of failed hosts. In a nutshell, if billing@yourbank.com emails you asking for your login details, and yourbank.com has a suitable SPF record, the spammer will be trapped.</p>
+<p>The SPF checking takes place when processing grey entries, and happens after checking spamtrap addresses &amp; permitted domains.</p>
+<h2>BLACKLIST-ONLY MODE</h2>
+<p>When running in default mode, the <em>iptables</em> rules described above are sufficient (when using the <em>netfilter</em> firewall driver). However when running in blacklist-only mode, a slightly modified iptables ruleset is required, redirecting any addresses found in the ⟨<em>greyd-blacklist</em>⟩ IPSet to <strong>greyd</strong>. Any other addresses are passed to the real MTA. For example:</p>
+<pre><code># iptables -t nat -A PREROUTING -p tcp --dport smtp \
+    -m set --match-set greyd-blacklist src -j DNAT --to-destination 127.0.0.1:8025
+# iptables -t filter -A INPUT -p tcp --dport smtp -j ACCEPT
+# iptables -t filter -A INPUT -p tcp --dport 8025 -d 127.0.0.1 -j ACCEPT</code></pre>
+<p>With the <em>ipfw</em> driver on FreeBSD the equivalent ruleset is:</p>
+<pre><code># ipfw table greyd-whitelist create type addr
+# ipfw add allow tcp from table\(greyd-whitelist\) to me 25 setup
+# ipfw add fwd 127.0.0.1,8025 tcp from any to me 25 setup in
+# ipfw add count log tcp from any to me 25 setup in
+# ipfw add count log tcp from me to any 25 setup out</code></pre>
+<p>The <em>fwd</em> rule keeps the packet&#x27;s destination, so <strong>greyd</strong> learns the original address from the connection itself; the two <em>log</em> rules feed <strong>greylogd</strong>(8) through the <em>ipfw0</em> interface (<em>ifconfig ipfw0 create</em>, <em>sysctl net.inet.ip.fw.verbose=0</em>).</p>
+<p>Addresses can be loaded into the table with the <em>ipset</em> command (consult the <em>ipset</em> manual for more details), like:</p>
+<pre><code># ipset add greyd-blacklist 1.2.3.4/30</code></pre>
+<p><strong>greyd-setup</strong>(8) can also be used to load addresses into the ⟨<em>greyd-blacklist</em>⟩ table. It has the added benefit of being able to remove addresses from blacklists, and will connect to <strong>greyd</strong> over a localhost socket, giving <strong>greyd</strong> information about each source of blacklist addresses, as well as custom rejection messages for each blacklist source that can be used to let any real person whose mail is deferred by <strong>greyd</strong> know why their address has been listed from sending mail. This is important as it allows legitimate mail senders to pressure spam sources into behaving properly so that they may be removed from the relevant blacklists.</p>
+<h2>PRIVILEGE SEPARATION AND SANDBOXING</h2>
+<p><strong>greyd</strong> runs as three processes: the main process which accepts connections, a firewall process which holds the firewall handle, and the greylisting process which holds the database handles. The main and firewall processes run as <em>user</em> in <em>chroot_dir</em>, the greylister as the <em>grey</em> section <em>user</em>. When <em>sandbox</em> is enabled (the default) each process additionally confines itself with the platform&#x27;s mechanisms once its setup is complete: Landlock, seccomp and <em>no_new_privs</em> on Linux, <strong>pledge</strong>(2) on OpenBSD. See <strong>greyd.conf</strong>(5).</p>
+<h2>SIGNALS</h2>
+<p><strong>greyd</strong> shuts down cleanly on SIGTERM and SIGINT. On SIGHUP the main process and both children reopen the file named by <em>log_to_file</em> (for log rotation) and continue; the configuration is not re-read. Blacklists are reloaded by running <strong>greyd-setup</strong>(8) again.</p>
+<h2>SOCKET ACTIVATION</h2>
+<p>When started by a service manager that passes listening sockets (the systemd <em>LISTEN_FDS</em> protocol), <strong>greyd</strong> adopts them instead of binding: a TCP socket named <em>smtp</em> (and optionally <em>smtp6</em>) becomes the SMTP listener and a socket named <em>config</em> the configuration socket; unnamed sockets are assigned by kind. This lets <strong>greyd</strong> start as its unprivileged user: the chroot is then skipped with a warning (the sandbox confines the filesystem instead), the processes keep the service user rather than switching to <em>user</em> and the <em>grey</em> section <em>user</em>, and the netfilter driver needs only CAP_NET_ADMIN. The installed <em>greyd.socket</em>, <em>greyd-config.socket</em> and <em>greyd-unprivileged.service</em> units set this up; the database directory must then be owned by the service user.</p>
+<h2>CONFIGURATION CONNECTIONS</h2>
+<p><strong>greyd</strong> listens for configuration connections on port 8026 by default, which can be overridden by setting the <em>config_port</em> configuration option. The configuration socket listens only on the INADDR_LOOPBACK address and only accepts connections from a reserved (privileged) source port. Alternatively, setting <em>config_socket</em> makes <strong>greyd</strong> listen on a unix domain socket instead; it is created mode 0600 and connections are accepted only from the super user and from the user <strong>greyd</strong> runs as, verified through the peer credentials. Blacklists larger than <em>max_config_frame</em> bytes are rejected. Configuration of <strong>greyd</strong> is done by connecting to the configuration socket, and sending blacklist information. Each blacklist consists of a name, a message to reject mail with, and addresses in CIDR format. This information is specified in the <strong>greyd.conf</strong> format, with entries terminated by &#x27;%%&#x27;. A connection may instead send <code>type = &quot;stats&quot;</code> followed by &#x27;%%&#x27; to receive the counters shown by <strong>--stats</strong> in the same format. For example, a blacklist:</p>
+<pre><code>name = &quot;greyd-blacklist
+message = &quot;Your IP address %A has been blocked by \\\\nour blacklist&quot;
+ips = [ &quot;1.3.4.2/31&quot;, &quot;2.3.4.5/30&quot;, &quot;1.2.3.4/32&quot; ]
+%%</code></pre>
+<p>A \&quot; will produce a double quote in the output. \\\\n will produce a newline. %A will expand to the connecting IP address in dotted quad format. %% may be used to produce a single % in the output. \\ will produce a single \. <strong>greyd</strong> will reject mail by displaying all the messages from all blacklists in which a connecting address is matched. <strong>greyd-setup</strong>(8) is normally used to configure this information.</p>
+<h2>PROXY PROTOCOL</h2>
+<p>When <em>proxy_protocol_enable</em> is set, <strong>greyd</strong> may sit behind a TCP load balancer such as haproxy or nginx and expects every connection to open with a proxy protocol header from one of the <em>proxy_protocol_permitted_proxies</em>. Both version 1 (text) and version 2 (binary) headers are accepted, and the version is detected from the first bytes of the connection. The addresses in the header replace the proxy&#x27;s own for blacklist matching, greylisting and logging. Version 2 <em>LOCAL</em> commands (as sent by health checks) are honoured, in which case the connection&#x27;s own addresses are used, and any TLVs are skipped. Headers for unsupported address families (UNSPEC, UDP and unix sockets), like a version 1 <em>UNKNOWN</em> header, are refused with the configured error code. See <strong>greyd.conf</strong>(5).</p>
+<h2>SYNCHRONISATION</h2>
+<p><strong>greyd</strong> supports realtime synchronisation of <strong>greyd</strong> databases between a number of <strong>greyd</strong> daemons running on multiple machines, using the <strong>-Y</strong> and <strong>-y</strong> options. The databases are synchronised for greylisted, trapped and whitelisted entries. Entries made manually using <strong>greydb</strong>(8) are also synchronised (if using the same <em>sync</em> section configuration in <em>greyd.conf</em>(5)). Furthermore, hosts whitelisted by <strong>greylogd</strong>(8) are also synchronised with the appropriate configuration in the same manner as <strong>greydb</strong>(8).</p>
+<p>The following example will accept incoming multicast and unicast synchronisation messages, and send outgoing multicast messages through the network interface eth0:</p>
+<pre><code># greyd -y eth0 -Y eth0</code></pre>
+<p>The second example will increase the multicast TTL to a value of 2, add the unicast targets foo.somewhere.org and bar.somewhere.org, and accept incoming unicast messages received on eth0 only.</p>
+<pre><code># greyd -y eth0:2 -Y eth0:2 -Y foo.somewhere.org -Y bar.somewhere.org</code></pre>
+<p>If a <em>key</em> file is specified in the <em>sync</em> <strong>greyd.conf</strong>(5) configuration section and exists, <strong>greyd</strong> will calculate the message-digest fingerprint (checksum) for the file and use it as a shared key to authenticate the synchronisation messages. Below is an example sync configuration (see <strong>greyd.conf</strong>(5) for more details):</p>
+<pre><code>section sync {
+    verify = 1
+    key = &quot;/etc/greyd/greyd.key&quot;
+    ...
+}</code></pre>
+<p>The file itself can contain any data. For example, to create a secure random key:</p>
+<pre><code># dd if=/dev/random of=/etc/greyd/greyd.key bs=2048 count=1</code></pre>
+<p>The file needs to be copied to all hosts sending or receiving synchronisation messages.</p>
+<h2>COPYRIGHT</h2>
+<p><strong>greyd</strong> is Copyright (C) 2015 Mikey Austin (greyd.org)</p>
+<h2>SEE ALSO</h2>
+<p>greyd.conf(5), greyd-setup(8), greydb(8), greylogd(8)</p>
+<h2>HISTORY</h2>
+<p><strong>greyd</strong> closly follows the design of the <em>OpenBSD</em> <em>spamd</em>, and thus implements all features of <em>spamd</em>. Essentially all of the code is written from scratch, with other notable differences from <em>spamd</em>:</p>
+<ul><li>The code is modular to support good test coverage by way of unit testing.</li><li>The system abstracts the interfaces to the firewall and database, to support a wide variety of setups (eg GNU/Linux).</li><li>The system is designed to make use of common configuration file(s) between <strong>greyd</strong>, <strong>greylogd</strong>, <strong>greydb</strong> &amp; <strong>greyd-setup</strong>.</li><li>The current implementation is a port to Go of the original C code base, keeping the same configuration files, wire protocols and command line switches.</li></ul>
+<h2>CREDITS</h2>
+<p>Much of this man page was taken from the <em>OpenBSD</em> manual, and adapted accordingly.</p></div></section>
+</main>
+<footer>
+<section><div class="content">
+<p>Copyright &copy; 2014-2026 Mikey Austin. greyd is free software under the ISC licence.
+<a href="https://github.com/mikey-austin/greyd-v2">Source on GitHub</a>.</p>
+</div></section>
+</footer>
+</body>
+</html>

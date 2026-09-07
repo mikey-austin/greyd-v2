@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>greyd-setup(8) - greyd</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="greyd - a greylisting and blacklisting spam deferral daemon, a Go port of OpenBSD spamd.">
+<link rel="stylesheet" href="../css/screen.css">
+<script defer src="../js/site.js"></script>
+</head>
+<body>
+<header class="group">
+<h1 class="logo"><a href="../index.html">grey<span>d</span></a></h1>
+<a class="menuControl expand" href="#">+</a>
+<a class="menuControl collapse" href="#">-</a>
+<nav><ul><li><a href="../index.html">home</a></li><li class="active"><a href="../docs.html">docs</a></li><li><a href="../downloads.html">downloads</a></li><li><a href="../code.html">code</a></li></ul></nav>
+</header>
+<main>
+<section><div class="content manpage"><h1>greyd-setup(8)</h1><p class="tagline">parse and load file of spammer addresses</p>
+<h2>SYNOPSIS</h2>
+<p><code>greyd-setup</code> [<strong>-bDdn</strong>] [<strong>-f</strong> config]</p>
+<h2>DESCRIPTION</h2>
+<p>The <strong>greyd-setup</strong> utility sends blacklist data to <strong>greyd</strong>(8), as well as configuring mail rejection messages for blacklist entries.</p>
+<p>When <strong>greyd-setup</strong> is run in blacklist only mode, it also sends blacklist data to the firewall <em>greyd-blacklist</em> table (or IPSet if using <em>netfilter</em> firewall driver). The ⟨<em>greyd-blacklist</em>⟩ table must then be used in conjunction with a firewall redirection rule to selectively redirect mail connections to <strong>greyd</strong>(8).</p>
+<p>The options are as follows:</p>
+<ul><li><strong>-f</strong> <em>config</em>: The main greyd configuration file.</li><li><strong>-b</strong>: Blacklisting only mode. Blacklist data is normally stored only in <strong>greyd</strong>(8). With this flag, data is stored in both <strong>greyd</strong>(8) and the firewall. Use this flag if <strong>greyd</strong>(8) is running with the -b flag too.</li><li><strong>-D</strong>: Daemonize; run <strong>greyd-setup</strong> in the background.</li><li><strong>-d</strong>: Debug mode reports a few pieces of information.</li><li><strong>-n</strong>: Dry-run mode. No data is shipped.</li></ul>
+<p>Lists are specified in the configuration file <strong>greyd.conf</strong>(5) and are processed in the order specified in the <em>lists</em> tag in the <em>setup</em> section, for example:</p>
+<pre><code>section setup {
+    lists = [ &quot;nixspam&quot;, &quot;uatraps&quot; ]
+    curl_path = &quot;/usr/bin/curl&quot;
+}</code></pre>
+<p>with the following list definitions:</p>
+<pre><code>blacklist nixspam {
+    message = &quot;Your address %A is in the nixspam list&quot;,
+    method  = &quot;http&quot;,
+    file = &quot;www.openbsd.org/spamd/nixspam.gz&quot;
+}
+
+blacklist nixspam {
+    message = &quot;Your address %A has sent mail to a ualberta.ca spamtrap\\\\n
+               within the last 24 hours&quot;,
+    method = &quot;http&quot;,
+    file = &quot;www.openbsd.org/spamd/traplist.gz&quot;
+}</code></pre>
+<p>The <em>http</em> method specified in the above blacklist definitions will instruct <strong>greyd-setup</strong> to fetch the lists using <em>curl</em>.</p>
+<p>Output is concatenated and sent to a running <strong>greyd</strong>(8). Addresses are sent along with the message <strong>greyd</strong> will give on mail rejection when a matching client connects. The configuration port for <strong>greyd</strong>(8) is found from the <em>config_port</em> configuration option in <strong>greyd.conf</strong>(5) (which defaults to port 8026); when <em>config_socket</em> is set the unix domain socket at that path is used instead.</p>
+<p><strong>greyd-setup</strong> reads all configuration information from the spamd.conf(5) file.</p>
+<h2>COPYRIGHT</h2>
+<p><strong>greyd-setup</strong> is Copyright (C) 2015 Mikey Austin (greyd.org)</p>
+<h2>SEE ALSO</h2>
+<p><strong>greyd.conf</strong>(5), <strong>greyd</strong>(8), <strong>greydb</strong>(8), <strong>greylogd</strong>(8)</p>
+<h2>CREDITS</h2>
+<p>Much of this man page was taken from the <em>OpenBSD</em> manual, and adapted accordingly.</p></div></section>
+</main>
+<footer>
+<section><div class="content">
+<p>Copyright &copy; 2014-2026 Mikey Austin. greyd is free software under the ISC licence.
+<a href="https://github.com/mikey-austin/greyd-v2">Source on GitHub</a>.</p>
+</div></section>
+</footer>
+</body>
+</html>

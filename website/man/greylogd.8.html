@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>greylogd(8) - greyd</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="greyd - a greylisting and blacklisting spam deferral daemon, a Go port of OpenBSD spamd.">
+<link rel="stylesheet" href="../css/screen.css">
+<script defer src="../js/site.js"></script>
+</head>
+<body>
+<header class="group">
+<h1 class="logo"><a href="../index.html">grey<span>d</span></a></h1>
+<a class="menuControl expand" href="#">+</a>
+<a class="menuControl collapse" href="#">-</a>
+<nav><ul><li><a href="../index.html">home</a></li><li class="active"><a href="../docs.html">docs</a></li><li><a href="../downloads.html">downloads</a></li><li><a href="../code.html">code</a></li></ul></nav>
+</header>
+<main>
+<section><div class="content manpage"><h1>greylogd(8)</h1><p class="tagline">greyd whitelist updating daemon</p>
+<h2>SYNOPSIS</h2>
+<p><code>greylogd</code> [<strong>-dI</strong>] [<strong>-f</strong> config] [<strong>-p</strong> port] [<strong>-P</strong> pidfile] [<strong>-W</strong> whiteexp] [<strong>-Y</strong> synctarget]</p>
+<h2>DESCRIPTION</h2>
+<p><strong>greylogd</strong> manipulates the <strong>greyd</strong>(8) database used for greylisting. <strong>greylogd</strong> updates the database whitelist entries whenever a connection to port 25 is logged by the configured firewall; see CONNECTION TRACKING below. The source addresses of inbound connections are whitelisted when seen by <strong>greylogd</strong> to ensure that their entries in the database do not expire if the connecting host continues to send legitimate mail. The destination addresses of outbound connections are whitelisted when seen by <strong>greylogd</strong> so that replies to outbound mail may be received without initial greylisting delays. Greylisting is explained more fully in <strong>greyd</strong>(8).</p>
+<p>The options are as follows:</p>
+<ul><li><strong>-f</strong> <em>config</em>: The main greyd configuration file.</li><li><strong>-d</strong>: Debugging mode. <strong>greylogd</strong> displays debug messages (suppressed by default).</li><li><strong>-P</strong> <em>pidfile</em>:</li></ul>
+<p>Specify the location for the pidfile.</p>
+<ul><li><strong>-I</strong>: Specify that <strong>greylogd</strong> is only to whitelist inbound SMTP connections. By default <strong>greylogd</strong> will whitelist the source of inbound SMTP connections, and the target of outbound SMTP connections.</li><li><strong>-W</strong> <em>whiteexp</em>: Adjust the time for <em>whiteexp</em> in hours. The default is 864 hours (approximately 36 days); maximum is 2160 hours (approximately 90 days).</li><li><strong>-Y</strong> <em>synctarget</em>: Add a target to receive synchronisation messages; see SYNCHRONISATION below. This option can be specified multiple times.</li></ul>
+<p>It is important to log any connections to and from the real MTA in order for <strong>greylogd</strong> to update the whitelist entries. See <strong>greyd</strong>(8) for an example ruleset for logging such connections.</p>
+<p><strong>greylogd</strong> sends log messages to syslogd(8) using facility daemon. <strong>greylogd</strong> will log each connection it sees at level LOG_DEBUG.</p>
+<h2>CONNECTION TRACKING</h2>
+<p>The tracking of connections is firewall dependent. When using the <em>netfilter</em> firewall driver, the iptables <em>NFLOG</em> target must be used to specify the inbound/outbound connections of interest via the appropriate <em>--nflog-group</em>. For example, to log the inbound connections the following iptables rules may be used (155 is the default inbound <em>--nflog-group</em>):</p>
+<pre><code># iptables -t nat -A PREROUTING -p tcp --dport smtp \
+    -m set --match-set greyd-whitelist src -j NFLOG --nflog-group 155</code></pre>
+<p>and similarly for tracking outbound connections (255 is the default outbound <em>--nflog-group</em>):</p>
+<pre><code># iptables -t filter -A OUTPUT -m conntrack --ctstate NEW \
+    -p tcp --dport 25 -j NFLOG --nflog-group 255</code></pre>
+<p>For the <em>netfilter</em> driver, the above default configuration may be overridden in <strong>greyd.conf</strong>(5), for example:</p>
+<pre><code>section firewall {
+    driver = &quot;netfilter&quot;
+    track_outbound = 1
+    inbound_group = 155
+    outbound_group = 255
+    ...
+}</code></pre>
+<p>For the <em>pf</em> firewall driver, the following PF rules will log the packets appropriately:</p>
+<pre><code>table &lt;greyd-whitelist&gt; persist
+pass in on egress proto tcp from any to any port smtp rdr-to 127.0.0.1 port 8025
+pass in log on egress proto tcp from &lt;greyd-whitelist&gt; to any port smtp
+pass out log on egress proto tcp to any port smtp</code></pre>
+<p>See <strong>greyd.conf</strong>(5) for more details.</p>
+<h2>SYNCHRONISATION</h2>
+<p><strong>greylogd</strong> supports realtime synchronisation of whitelist states by sending the information it updates to a number of <strong>greyd</strong>(8) daemons running on multiple machines. To enable synchronisation, use the command line option -Y to specify the machines to which <strong>greylogd</strong> will send messages when it updates the state information. The synchronisation may also be configured entirely via <strong>greyd.conf</strong>(5). For more information, see <strong>greyd</strong>(8) and <strong>greyd.conf</strong>(5).</p>
+<h2>COPYRIGHT</h2>
+<p><strong>greylogd</strong> is Copyright (C) 2015 Mikey Austin (greyd.org)</p>
+<h2>SEE ALSO</h2>
+<p><strong>greyd.conf</strong>(5), <strong>greyd-setup</strong>(8), <strong>greydb</strong>(8), <strong>greyd</strong>(8)</p>
+<h2>CREDITS</h2>
+<p>Much of this man page was taken from the <em>OpenBSD</em> manual, and adapted accordingly.</p></div></section>
+</main>
+<footer>
+<section><div class="content">
+<p>Copyright &copy; 2014-2026 Mikey Austin. greyd is free software under the ISC licence.
+<a href="https://github.com/mikey-austin/greyd-v2">Source on GitHub</a>.</p>
+</div></section>
+</footer>
+</body>
+</html>

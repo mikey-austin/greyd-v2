@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>greyd-monitor(8) - greyd</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="greyd - a greylisting and blacklisting spam deferral daemon, a Go port of OpenBSD spamd.">
+<link rel="stylesheet" href="../css/screen.css">
+<script defer src="../js/site.js"></script>
+</head>
+<body>
+<header class="group">
+<h1 class="logo"><a href="../index.html">grey<span>d</span></a></h1>
+<a class="menuControl expand" href="#">+</a>
+<a class="menuControl collapse" href="#">-</a>
+<nav><ul><li><a href="../index.html">home</a></li><li class="active"><a href="../docs.html">docs</a></li><li><a href="../downloads.html">downloads</a></li><li><a href="../code.html">code</a></li></ul></nav>
+</header>
+<main>
+<section><div class="content manpage"><h1>greyd-monitor(8)</h1><p class="tagline">Prometheus exporter for greyd</p>
+<h2>SYNOPSIS</h2>
+<p><code>greyd-monitor</code> [<strong>-dFV</strong>] [<strong>-f</strong> config] [<strong>-l</strong> address] [<strong>-p</strong> port] [<strong>-i</strong> seconds]</p>
+<h2>DESCRIPTION</h2>
+<p><strong>greyd-monitor</strong> polls a running <strong>greyd</strong>(8) for its operational counters and serves them in the Prometheus text exposition format, so that greylisting activity, connection load, blacklist sizes and database growth can be graphed and alerted on.</p>
+<p>It asks <strong>greyd</strong> for its statistics over the configuration socket (see CONFIGURATION CONNECTIONS in <strong>greyd</strong>(8)) every <em>interval</em> seconds and keeps the last answer. Scrapes are served from memory, so a slow or unresponsive <strong>greyd</strong> never slows down the scraper; <strong>greyd_up</strong> reports whether the last poll succeeded.</p>
+<p>The options are as follows:</p>
+<ul><li><strong>-f</strong> <em>config</em>: The main greyd configuration file. The <em>monitor</em> section and the <em>config_socket</em> / <em>config_port</em> variables are read from it; see <strong>greyd.conf</strong>(5).</li><li><strong>-l</strong> <em>address</em>: The address to serve metrics on (overrides <em>monitor.bind_address</em>, default <em>127.0.0.1</em>).</li><li><strong>-p</strong> <em>port</em>: The port to serve metrics on (overrides <em>monitor.port</em>, default <em>9143</em>).</li><li><strong>-i</strong> <em>seconds</em>: How often to poll <strong>greyd</strong> (overrides <em>monitor.interval</em>, default <em>30</em>).</li><li><strong>-d</strong>: Debugging mode. <strong>greyd-monitor</strong> displays debug messages (suppressed by default).</li><li><strong>-F</strong>: Run in the foreground instead of detaching (the <em>daemonize</em> option).</li><li><strong>-V</strong>: Print the version and exit.</li></ul>
+<h2>ENDPOINTS</h2>
+<ul><li><em>/metrics</em>: The metrics, in the Prometheus text format.</li><li><em>/healthz</em>: Returns <em>200</em> when the last poll of <strong>greyd</strong> succeeded and <em>503</em> otherwise, for load balancer or container health checks.</li></ul>
+<h2>METRICS</h2>
+<p>All metrics are prefixed <strong>greyd_</strong>. Counters are cumulative since <strong>greyd</strong> started; gauges are instantaneous. Database entry gauges are taken from the greylister&#x27;s periodic database scan and are omitted until the first scan has completed.</p>
+<ul><li><strong>greyd_up</strong>: 1 when the last poll succeeded.</li><li><strong>greyd_uptime_seconds</strong>: Seconds since <strong>greyd</strong> started.</li><li><strong>greyd_greylisting_enabled</strong>: 0 when <strong>greyd</strong> runs in blacklist-only mode.</li><li><strong>greyd_connections{state=&quot;all&quot;|&quot;black&quot;}</strong>, <strong>greyd_max_connections{state=...}</strong>: Currently open SMTP connections, and the configured limits (<em>max_cons</em>, <em>max_cons_black</em>).</li><li><strong>greyd_connections_total{result=&quot;accepted&quot;|&quot;accepted_black&quot;|&quot;refused_full&quot;|&quot;refused_source&quot;}</strong>: Connections accepted (and how many of those were blacklisted on arrival), and connections closed on accept because the global or the per-source limit was reached.</li><li><strong>greyd_greylist_tuples_total</strong>: Envelopes (client, HELO, sender, recipient) handed to the greylister.</li><li><strong>greyd_replies_total{kind=&quot;grey&quot;|&quot;black&quot;}</strong>: Final rejections sent: the temporary failure to greylisted clients, or a blacklist message.</li><li><strong>greyd_proxy_headers_total</strong>: Accepted PROXY protocol headers.</li><li><strong>greyd_db_entries{type=&quot;grey&quot;|&quot;white&quot;|&quot;trapped&quot;|&quot;spamtrap&quot;|&quot;domain&quot;}</strong>, <strong>greyd_db_scan_age_seconds</strong>: Database entries by kind at the last scan, and how long ago that scan ran.</li><li><strong>greyd_blacklist_entries{name=...}</strong>: Entries in each blacklist loaded through <strong>greyd-setup</strong>(8) or the greytrap.</li><li><strong>greyd_monitor_polls_total{result=&quot;ok&quot;|&quot;error&quot;}</strong>, <strong>greyd_monitor_poll_duration_seconds</strong>, <strong>greyd_monitor_last_poll_timestamp_seconds</strong>, <strong>greyd_monitor_build_info{version=...}</strong>: The exporter&#x27;s own health.</li></ul>
+<h2>PRIVILEGES</h2>
+<p><strong>greyd-monitor</strong> needs no privileges other than access to the configuration socket. With <em>config_socket</em> set, <strong>greyd</strong> admits the super user and the user it runs as (the <em>user</em> option), so run <strong>greyd-monitor</strong> as that user; when started as root it drops to <em>monitor.user</em>, or to <em>user</em> when that is unset. With the loopback TCP configuration port, <strong>greyd</strong> requires a reserved source port and <strong>greyd-monitor</strong> must then run as root, so <em>config_socket</em> is recommended. Each process confines itself after start up when the <em>sandbox</em> option is on.</p>
+<p>A scrape configuration for Prometheus:</p>
+<pre><code>scrape_configs:
+  - job_name: greyd
+    static_configs:
+      - targets: [&#x27;mx.example.org:9143&#x27;]</code></pre>
+<p>The same counters can be printed on the command line with <strong>greyd --stats</strong>, and the database counts alone with <strong>greydb -s</strong>.</p>
+<h2>COPYRIGHT</h2>
+<p><strong>greyd-monitor</strong> is Copyright (C) 2014-2026 Mikey Austin (greyd.org). All rights reserved.</p>
+<h2>SEE ALSO</h2>
+<p>greyd.conf(5), greyd(8), greydb(8), greyd-setup(8), greylogd(8)</p>
+<h2>CREDITS</h2>
+<ul><li>Mikey Austin</li></ul></div></section>
+</main>
+<footer>
+<section><div class="content">
+<p>Copyright &copy; 2014-2026 Mikey Austin. greyd is free software under the ISC licence.
+<a href="https://github.com/mikey-austin/greyd-v2">Source on GitHub</a>.</p>
+</div></section>
+</footer>
+</body>
+</html>

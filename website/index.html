@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>greyd - spam deferral daemon</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="greyd - a greylisting and blacklisting spam deferral daemon, a Go port of OpenBSD spamd.">
+<link rel="stylesheet" href="css/screen.css">
+<script defer src="js/site.js"></script>
+</head>
+<body>
+<header class="group">
+<h1 class="logo"><a href="index.html">grey<span>d</span></a></h1>
+<a class="menuControl expand" href="#">+</a>
+<a class="menuControl collapse" href="#">-</a>
+<nav><ul><li class="active"><a href="index.html">home</a></li><li><a href="docs.html">docs</a></li><li><a href="downloads.html">downloads</a></li><li><a href="code.html">code</a></li></ul></nav>
+</header>
+<main>
+
+<section class="banner home"><div class="content">
+<h2>Block spam before it sets foot in your network.</h2>
+</div></section>
+<section><div class="content group">
+<div class="tile">
+<h3>What is it?</h3>
+<p><em>greyd</em> is a lightweight greylisting &amp; blacklisting daemon. It runs on your
+gateway pretending to be a real mail server, tracks every host that connects and
+automatically whitelists the ones that behave like real mail servers.</p>
+<p><em>greyd</em> is written in <strong>Go</strong>, builds to static binaries with no C
+dependencies, and drops privileges into a chroot with a per-process sandbox
+(Landlock and seccomp on Linux, pledge on OpenBSD).</p>
+<p>The suite is five programs:</p>
+<ul>
+<li><strong><a href="man/greyd.8.html">greyd</a></strong> &mdash; the main spam deferral daemon.</li>
+<li><strong><a href="man/greylogd.8.html">greylogd</a></strong> &mdash; connection tracking &amp; whitelist updating.</li>
+<li><strong><a href="man/greydb.8.html">greydb</a></strong> &mdash; greylisting / greytrapping database management.</li>
+<li><strong><a href="man/greyd-setup.8.html">greyd-setup</a></strong> &mdash; blacklist &amp; whitelist population.</li>
+<li><strong><a href="man/greyd-monitor.8.html">greyd-monitor</a></strong> &mdash; Prometheus metrics exporter.</li>
+</ul>
+</div>
+<div class="tile">
+<h3>Which systems are supported?</h3>
+<p><em>greyd</em> runs on <strong>GNU/Linux</strong>, <strong>OpenBSD</strong>,
+<strong>NetBSD</strong>, <strong>FreeBSD</strong> &amp; <strong>DragonFly BSD</strong>,
+and they can all synchronise with each other.</p>
+<p>It talks to the firewall through a pluggable driver:
+<strong>netfilter</strong> (Linux, over netlink), <strong>pf</strong> (the BSDs),
+<strong>ipfw</strong> (FreeBSD), <strong>npf</strong> (NetBSD) and a <strong>dummy</strong>
+driver for setups where the firewall is managed elsewhere.</p>
+<p>Greylisting state lives in a pluggable database:
+<strong>sqlite</strong>, <strong>mysql</strong>, <strong>postgresql</strong>,
+<strong>bolt</strong> (an embedded pure-Go store) or an in-memory store.</p>
+<h3>Heritage</h3>
+<p><em>greyd</em> follows the design of OpenBSD's excellent
+<a href="https://man.openbsd.org/spamd">spamd</a>, implements its features and
+synchronises with it over the same protocol. This is a faithful Go port of the
+original C <em>greyd</em>, verified against spamd in continuous integration.</p>
+</div>
+<div class="tile">
+<h3>Blacklisting</h3>
+<p>Blacklists can be loaded into <em>greyd</em> with
+<a href="man/greyd-setup.8.html">greyd-setup</a>. A host on a blacklist is answered
+<em>very slowly</em>, byte by byte, to waste as much of the spammer's time as possible.</p>
+<h3>Spam-trapping</h3>
+<p><em>greyd</em> traps spammers (<em>greytrapping</em>) when they:</p>
+<ul>
+<li>send mail to a designated spamtrap address (set up with <a href="man/greydb.8.html">greydb</a>);</li>
+<li>send mail to a backup MX out of order;</li>
+<li>spoof a sender whose domain fails SPF validation.</li>
+</ul>
+<p>Trapped hosts are treated the same as blacklisted hosts.</p>
+<h3>Observability</h3>
+<p><a href="man/greyd-monitor.8.html">greyd-monitor</a> exports connection, greylist and
+database metrics for Prometheus; <code>greyd --stats</code> prints the same counters and
+<code>greydb -s</code> summarises the database.</p>
+</div>
+</div></section>
+
+</main>
+<footer>
+<section><div class="content">
+<p>Copyright &copy; 2014-2026 Mikey Austin. greyd is free software under the ISC licence.
+<a href="https://github.com/mikey-austin/greyd-v2">Source on GitHub</a>.</p>
+</div></section>
+</footer>
+</body>
+</html>

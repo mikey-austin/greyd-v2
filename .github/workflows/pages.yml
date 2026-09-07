@@ -1,0 +1,46 @@
+name: Pages
+
+# Builds the static greyd website (website/build.py renders the man pages
+# and the site into website/) and publishes it to GitHub Pages. Enable it
+# once under the repository Settings > Pages by choosing "GitHub Actions"
+# as the source.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'doc/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; let a running one finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: render the site
+        run: python3 website/build.py
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: website
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

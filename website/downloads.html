@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Downloads - greyd</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="greyd - a greylisting and blacklisting spam deferral daemon, a Go port of OpenBSD spamd.">
+<link rel="stylesheet" href="css/screen.css">
+<script defer src="js/site.js"></script>
+</head>
+<body>
+<header class="group">
+<h1 class="logo"><a href="index.html">grey<span>d</span></a></h1>
+<a class="menuControl expand" href="#">+</a>
+<a class="menuControl collapse" href="#">-</a>
+<nav><ul><li><a href="index.html">home</a></li><li><a href="docs.html">docs</a></li><li class="active"><a href="downloads.html">downloads</a></li><li><a href="code.html">code</a></li></ul></nav>
+</header>
+<main>
+<section class="banner"><div class="content"><h2>Downloads</h2></div></section>
+<section><div class="content group">
+<div class="tile wide">
+<h3>Release binaries and packages</h3>
+<p>Each release publishes static binaries for Linux, FreeBSD and OpenBSD (amd64 and
+arm64), plus Debian and RPM packages, on the GitHub releases page. Archives ship with
+signed checksums and an SBOM.</p>
+<p><a href="https://github.com/mikey-austin/greyd-v2/releases/latest">Latest release &rarr;</a></p>
+</div>
+<div class="tile wide">
+<h3>Install with Go</h3>
+<p>With a Go 1.25 toolchain:</p>
+<div class="highlight"><code>$ git clone https://github.com/mikey-austin/greyd-v2
+$ cd greyd-v2
+$ make
+$ sudo make install</code></div>
+<p>All firewall and database drivers and SPF support are compiled in; there are no
+build-time feature flags. See <a href="https://github.com/mikey-austin/greyd-v2/blob/main/INSTALL">INSTALL</a>
+for the paths, the system users and the systemd units.</p>
+</div>
+<div class="tile wide">
+<h3>Packages</h3>
+<p>Build Debian and RPM packages locally with:</p>
+<div class="highlight"><code>$ make packages</code></div>
+<p>They install the five programs, the sample configuration, the man pages and hardened
+systemd units, and create the <code>greyd</code> and <code>greydb</code> system users.</p>
+</div>
+<div class="tile wide">
+<h3>Docker</h3>
+<p>A container image builds from the repository:</p>
+<div class="highlight"><code>$ make docker</code></div>
+</div>
+</div></section>
+
+</main>
+<footer>
+<section><div class="content">
+<p>Copyright &copy; 2014-2026 Mikey Austin. greyd is free software under the ISC licence.
+<a href="https://github.com/mikey-austin/greyd-v2">Source on GitHub</a>.</p>
+</div></section>
+</footer>
+</body>
+</html>

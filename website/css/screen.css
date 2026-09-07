@@ -1,4 +1,4 @@
-@import url(http://fonts.googleapis.com/css?family=Raleway:400,200,700);
+@import url(https://fonts.googleapis.com/css?family=Raleway:400,200,700);
 
 * {
     font-family: 'Raleway', sans-serif;
@@ -229,4 +229,72 @@ code {
     .banner h2 {
         text-align: left;
     }
+}
+
+/*
+ * Static site additions (see website/build.py).
+ */
+main {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding-top: 63px;
+}
+
+.manpage {
+    max-width: 820px;
+}
+
+.manpage h1 {
+    margin: 10px 0 0 0;
+}
+
+.manpage .tagline {
+    color: #888;
+    font-style: italic;
+    margin-bottom: 24px;
+}
+
+.manpage h2 {
+    margin: 28px 0 8px 0;
+    padding-bottom: 4px;
+    border-bottom: solid 1px #eee;
+    font-weight: 700;
+}
+
+.manpage h3 {
+    margin: 20px 0 6px 0;
+}
+
+.manpage ul {
+    margin: 8px 0 8px 22px;
+}
+
+.manpage li {
+    margin-bottom: 6px;
+}
+
+.manpage p {
+    margin-bottom: 12px;
+}
+
+.manpage pre {
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    overflow-x: auto;
+    background-color: #f7f7f9;
+    border: 1px solid #e1e1e8;
+    border-radius: 4px;
+}
+
+.manpage pre code {
+    white-space: pre;
+}
+
+.banner.home {
+    background-color: #454545;
+}
+
+.banner.home h2 {
+    color: #fff;
+    padding: 10px 0;
 }

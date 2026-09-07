@@ -222,6 +222,19 @@ OIDC identity. Verify a download with:
 "make release-check" validates the goreleaser configuration and
 "make release-snapshot" builds everything into dist/ without publishing.
 
+Project website
+-------------------------------------
+
+The project website is a static site under website/, rendered by
+website/build.py and published to GitHub Pages by
+.github/workflows/pages.yml. Enable it once under the repository
+Settings > Pages by choosing "GitHub Actions" as the source; every push
+that touches website/ or doc/ then redeploys it. Build it locally with:
+
+    $ python3 website/build.py
+
+and open website/index.html.
+
 Regenerating the configuration parser
 -------------------------------------
 

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Code - greyd</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="greyd - a greylisting and blacklisting spam deferral daemon, a Go port of OpenBSD spamd.">
+<link rel="stylesheet" href="css/screen.css">
+<script defer src="js/site.js"></script>
+</head>
+<body>
+<header class="group">
+<h1 class="logo"><a href="index.html">grey<span>d</span></a></h1>
+<a class="menuControl expand" href="#">+</a>
+<a class="menuControl collapse" href="#">-</a>
+<nav><ul><li><a href="index.html">home</a></li><li><a href="docs.html">docs</a></li><li><a href="downloads.html">downloads</a></li><li class="active"><a href="code.html">code</a></li></ul></nav>
+</header>
+<main>
+<section class="banner"><div class="content"><h2>Code</h2></div></section>
+<section><div class="content group">
+<div class="tile wide">
+<h3>Grab a copy</h3>
+<p>The code is on GitHub:
+<a href="https://github.com/mikey-austin/greyd-v2">github.com/mikey-austin/greyd-v2</a>.</p>
+<div class="highlight"><code>$ git clone https://github.com/mikey-austin/greyd-v2
+$ cd greyd-v2
+$ make          # build the five programs into bin/
+$ make test     # go vet + unit tests
+$ make lint     # golangci-lint + govulncheck</code></div>
+<p>Building needs Go 1.25 and GNU make. Java is only needed for
+<code>make generate</code>, which regenerates the ANTLR configuration parser; the
+generated sources are committed.</p>
+</div>
+<div class="tile wide">
+<h3>Layout</h3>
+<p>The core (<code>internal/core</code>) defines the store, firewall and SPF ports; the
+drivers live under <code>adapters/</code> and register themselves. The configuration
+language is an ANTLR4 grammar, settings are a typed schema, and the programs are thin
+wrappers under <code>internal/app</code> and <code>cmd</code>. See
+<a href="https://github.com/mikey-austin/greyd-v2/blob/main/docs/ARCHITECTURE.md">docs/ARCHITECTURE.md</a>.</p>
+</div>
+<div class="tile wide">
+<h3>Testing</h3>
+<p>Beyond the unit, fuzz and property tests, the project runs end-to-end integration
+harnesses in continuous integration: a privileged Linux container (netfilter, DNAT,
+conntrack, NFLOG), and OpenBSD, FreeBSD, NetBSD and DragonFly BSD virtual machines
+exercising pf, ipfw and npf. An OpenBSD job also verifies synchronisation against the
+base-system spamd, and a nightly soak test watches for leaks.</p>
+</div>
+<div class="tile wide">
+<h3>Contributing</h3>
+<p>Issues and pull requests are welcome on GitHub. Please keep
+<code>make test</code> and <code>make lint</code> green.</p>
+</div>
+</div></section>
+
+</main>
+<footer>
+<section><div class="content">
+<p>Copyright &copy; 2014-2026 Mikey Austin. greyd is free software under the ISC licence.
+<a href="https://github.com/mikey-austin/greyd-v2">Source on GitHub</a>.</p>
+</div></section>
+</footer>
+</body>
+</html>

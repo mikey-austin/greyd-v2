@@ -1,12 +1,23 @@
 greyd - greylisting & blacklisting daemon
 ================================================
 
-![Go CI](https://github.com/mikey-austin/greyd-v2/workflows/Go%20CI/badge.svg)
+![Go CI](https://github.com/mikey-austin/greyd-v2/actions/workflows/go.yml/badge.svg)
+![Integration](https://github.com/mikey-austin/greyd-v2/actions/workflows/integration.yml/badge.svg)
+![Coverage](https://github.com/mikey-austin/greyd-v2/actions/workflows/coverage.yml/badge.svg)
 
-Project Website
+Project website
 ---------------
 
-Check out the project website (http://greyd.org) for more information and documentation.
+The project website is hosted on GitHub Pages:
+[mikey-austin.github.io/greyd-v2](https://mikey-austin.github.io/greyd-v2/). Its
+source is under `website/` and is built by `website/build.py`. The manual pages,
+[architecture notes](docs/ARCHITECTURE.md) and [INSTALL](INSTALL) guide are the
+canonical documentation.
+
+> This is **greyd-v2**, a Go port of the original C
+> [greyd](https://github.com/mikey-austin/greyd). It keeps the same programs,
+> configuration files, command line switches and wire protocols, synchronises with
+> OpenBSD's spamd, and is verified end to end on Linux and four BSDs in CI.
 
 Overview
 --------
@@ -120,15 +131,17 @@ The current code base is a port to Go of the original C implementation. It keeps
 programs, configuration files, command line switches, wire protocols and sync protocol, so it
 is a drop-in replacement. The process model, the pipes between the processes and the
 ports & adapters layout of the code are described in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-The following points remain to be done:
+
+Verification and platform notes:
   * the **netfilter** driver is verified end to end in CI (privileged container), the **pf**
-    driver and pledge sandbox in an OpenBSD VM, the **ipfw** driver in a FreeBSD VM, and
-    synchronisation in both directions against the spamd of the OpenBSD base system
+    driver and pledge sandbox in an OpenBSD VM, the **ipfw** driver in a FreeBSD VM, the **npf**
+    driver in a NetBSD VM, and synchronisation in both directions against the spamd of the
+    OpenBSD base system
   * on NetBSD the **npf** driver (and the **pf** driver) return the proxy address for original
     destination lookups, so the low priority MX trap needs an unredirected listener there
   * the **sqlite** driver is not available on DragonFly BSD (the embedded SQLite has no port
     for it); use **bolt** there
-  * more testing in the wild on different setups
+  * production use on more varied setups is always welcome
 
 The port fixes a few defects of the C implementation on purpose, so behaviour differs in
 these corners:
@@ -158,6 +171,23 @@ summarised by `greydb -s`). The PROXY protocol handler accepts version 1 and ver
 On Linux, `greyd` can also be started without root through the installed socket units
 (`greyd.socket`, `greyd-config.socket`, `greyd-unprivileged.service`). See **greyd.conf**(5) and
 **greyd**(8).
+
+Testing
+-------
+
+Beyond unit, fuzz and property tests, the project runs end-to-end integration harnesses in
+continuous integration:
+
+  * a privileged Linux container exercising the full **netfilter** flow (DNAT, conntrack,
+    NFLOG, ipset), a privilege audit, a sandbox-enforcement probe, chaos and restart steps,
+    a latency SLO and large firewall-set timings;
+  * OpenBSD, FreeBSD, NetBSD and DragonFly BSD virtual machines exercising **pf**, **ipfw**
+    and **npf**, and the OpenBSD sync compatibility test against the base-system spamd;
+  * a nightly soak test that watches for memory, descriptor and scanner regressions;
+  * a benchmark regression gate.
+
+Run the Linux harness locally with `make test-integration` (needs Docker) and the soak with
+`make test-soak`. See [packages/integration/README.md](packages/integration/README.md).
 
 Licensing
 ---------

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>greyd.conf(5) - greyd</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="greyd - a greylisting and blacklisting spam deferral daemon, a Go port of OpenBSD spamd.">
+<link rel="stylesheet" href="../css/screen.css">
+<script defer src="../js/site.js"></script>
+</head>
+<body>
+<header class="group">
+<h1 class="logo"><a href="../index.html">grey<span>d</span></a></h1>
+<a class="menuControl expand" href="#">+</a>
+<a class="menuControl collapse" href="#">-</a>
+<nav><ul><li><a href="../index.html">home</a></li><li class="active"><a href="../docs.html">docs</a></li><li><a href="../downloads.html">downloads</a></li><li><a href="../code.html">code</a></li></ul></nav>
+</header>
+<main>
+<section><div class="content manpage"><h1>greyd.conf(5)</h1><p class="tagline">greyd configuration file</p>
+<h2>SYNOPSIS</h2>
+<p>This configuration file is read by <strong>greyd</strong>, <strong>greydb</strong>, <strong>greylogd</strong> and <strong>greyd-setup</strong>.</p>
+<h2>DESCRIPTION</h2>
+<p>The syntax consists of sequences of assignments, each terminated by a newline:</p>
+<pre><code># A string value.
+variable = &quot;value&quot;
+
+# A number value.
+variable = 10  # Another comment.
+
+# A list value may contain strings or numbers.
+# Trailing commas are allowed.
+variable = [ 10, &quot;value&quot;, ]</code></pre>
+<p>Comments, whitespace and blank lines are ignored.</p>
+<p><em>Sections</em> may contain many assignments, separated by a newline.</p>
+<pre><code>section sectionname {
+    var1 = &quot;val1&quot;
+    var2 = 10
+    var3 = [ 1, 2, 3 ]
+}</code></pre>
+<p><em>Blacklists</em> and <em>whitelists</em> use the same syntax as the <em>section</em> above (see BLACKLIST CONFIGURATION):</p>
+<pre><code>blacklist blacklistname {
+    ...
+}
+
+whitelist whitelistname {
+    ...
+}</code></pre>
+<p>Configuration may also be recursively loaded by way of an <em>include</em>:</p>
+<pre><code># Globbing is supported.
+include &quot;/etc/greyd/conf.d/*.conf&quot;</code></pre>
+<h2>GENERAL OPTIONS</h2>
+<p>The following options may be specified outside of a section. A <em>boolean</em> value is a <em>number</em> which takes the values <em>0</em> or <em>1</em>.</p>
+<ul><li><strong>syslog_enable</strong> = <em>boolean</em>: Send log messages to <strong>syslogd</strong>(8) (facility daemon). Enabled by default; the tools force it off, and <em>log_to_file</em> can be used with or without it.</li><li><strong>debug</strong> = <em>boolean</em>: Log debug messages which are suppressed by default.</li><li><strong>verbose</strong> = <em>boolean</em>: Log blacklisted connection headers.</li><li><strong>log_to_file</strong> = <em>string</em>: When this option is set greyd will send logs to the specified path. This is useful for containerized environments.</li><li><strong>daemonize</strong> = <em>boolean</em>: Detach from the controlling terminal. Defaults to <em>1</em>.</li><li><strong>proxy_protocol_enable</strong> = <em>boolean</em>: Proxy protocol configuration. Enabling this configuration allows greyd to sit behind a TCP load balancer that speaks the proxy protocol as defined in the <a href="http://www.haproxy.org/download/1.8/doc/proxy-protocol.txt">protocol spec</a>. Both version 1 (text) and version 2 (binary) headers are accepted; the version is detected from the first bytes of the connection. Version 2 <em>LOCAL</em> commands (as sent by health checks) are honoured, in which case the connection&#x27;s own addresses are used, and any TLVs are skipped. Headers for unsupported address families (UNSPEC, UDP and unix sockets), like a version 1 <em>UNKNOWN</em> header, are refused. Defaults to <em>false</em>. Note that if this is enabled <em>all</em> client connections will need to specify the proxy protocol header first, ie there is no mixing of proxied and direct requests. You <em>must</em> also specify the <code>proxy_protocol_permitted_proxies</code> list of trusted proxies. There are many upstream proxies/load balancers that support this protocol, for example nginx and haproxy to name a couple.</li><li><strong>proxy_protocol_permitted_proxies</strong> = <em>list</em>: The upstream proxies must be explicitly configured. Without this any client would be able to spoof their addresses. This setting only has an effect if <code>proxy_protocol_enable</code> is set to <em>true</em>. The elements in this list must be strings consisting of IPv4 and/or IPv6 CIDRs.</li><li><strong>drop_privs</strong> = <em>boolean</em>: Drop priviliges and run as the specified <strong>user</strong>. Defaults to <em>1</em>.</li><li><strong>chroot</strong> = <em>boolean</em>: Chroot the main <strong>greyd</strong> process that accepts connections. Defaults to <em>1</em>.</li><li><strong>chroot_dir</strong> = <em>string</em>: The location to chroot to.</li><li><strong>sandbox</strong> = <em>boolean</em>: Confine each process once it has dropped privileges and opened what it needs. On Linux this sets <em>no_new_privs</em>, restricts filesystem access with Landlock (the main and firewall processes keep none, the greylister keeps its database directory and <em>/etc</em> for the resolver) and installs a seccomp filter that refuses to start programs, trace, mount, load modules or change namespaces. On OpenBSD the processes are pledged. Unsupported kernels are skipped with a debug message. Enabled by default; set to <em>0</em> when running a database or firewall driver with unusual filesystem needs.</li><li><strong>sandbox_strict</strong> = <em>boolean</em>: On Linux, replace the sandbox&#x27;s seccomp deny list with an allow list of the system calls the Go runtime and the drivers are known to use; anything else fails with EPERM and is logged by the affected operation rather than killing the process. Tighter, but a database driver or kernel needing an unlisted call will surface as errors, so try it in a test environment first. Off by default.</li><li><strong>setrlimit</strong> = <em>boolean</em>: Use setrlimit to self-impose resource limits such as the maximum number of file descriptors (ie connections).</li><li><strong>max_cons</strong> = <em>number</em>: The maximum number of concurrent connections to handle. This number can not exceed the operating system maximum file descriptor limit. Defaults to <em>800</em>.</li><li><strong>max_cons_black</strong> = <em>number</em>: The maximum number of concurrent blacklisted connections to tarpit. This number can not exceed the maximum configured number of connections. Defaults to <em>800</em>.</li><li><strong>port</strong> = <em>number</em>: The port to listen on. Defaults to <em>8025</em>.</li><li><strong>user</strong> = <em>string</em>: The username for the main <strong>greyd</strong> daemon the run as.</li><li><strong>bind_address</strong> = <em>string</em>: The IPv4 address to listen on. Defaults to listen on all addresses.</li><li><strong>port</strong> = <em>number</em>: The port to listen on. Defaults to <em>8025</em>.</li><li><strong>config_port</strong> = <em>number</em>: The port on which to listen for blacklist configuration data (see <strong>greyd-setup</strong>(8)). Defaults to <em>8026</em>.</li><li><strong>config_socket</strong> = <em>string</em>: When set, blacklist configuration data is accepted on this unix domain socket instead of the loopback TCP port. Only the super user and the <em>user</em> <strong>greyd</strong> runs as may connect (the peer credentials are checked). <strong>greyd-setup</strong>(8) reads the same option to find the daemon. Unset by default.</li><li><strong>max_config_frame</strong> = <em>number</em>: The largest blacklist (in bytes) accepted on a configuration connection or from the greylister. Defaults to <em>67108864</em> (64 MiB); the minimum is <em>1024</em>.</li><li><strong>max_cons_per_source</strong> = <em>number</em>: The maximum number of simultaneous connections accepted from one client address; further connections from that address are closed immediately. <em>0</em> (the default) disables the limit.</li><li><strong>max_line_length</strong> = <em>number</em>: The longest SMTP command line (in bytes) a client may send before the line is rejected with a 500 error. Defaults to <em>8191</em>.</li><li><strong>greyd_pidfile</strong> = <em>string</em>: The greyd pidfile path.</li><li><strong>greylogd_pidfile</strong> = <em>string</em>: The greylogd pidfile path.</li><li><strong>hostname</strong> = <em>string</em>: The hostname to display to clients in the initial SMTP banner.</li><li><strong>enable_ipv6</strong> = <em>boolean</em>: Listen for IPv6 connections. Disabled by default.</li><li><strong>bind_address_ipv6</strong> = <em>string</em>: The IPv6 address to listen on. Only has an effect if <strong>enable_ipv6</strong> is set to true.</li><li><strong>stutter</strong> = <em>number</em>: For blacklisted connections, the number of seconds between stuttered bytes.</li><li><strong>window</strong> = <em>number</em>: Adjust the socket receive buffer to the specified number of bytes (window size). This slows down spammers even more.</li><li><strong>banner</strong> = <em>string</em>: The banner message to be displayed to new connections.</li><li><strong>error_code</strong> = <em>string</em>: The SMTP error code to show blacklisted spammers. May be either <em>&quot;450&quot;</em> (default) or <em>&quot;550&quot;</em>.</li></ul>
+<h2>FIREWALL SECTION</h2>
+<p>The following options are common to all firewall drivers:</p>
+<ul><li><strong>driver</strong> = <em>string</em>: The name of the firewall driver to use. All drivers are compiled into the programs and are selected by name. May be one of <em>netfilter</em>, <em>pf</em>, <em>ipfw</em>, <em>npf</em> or <em>dummy</em>. Legacy values from previous releases such as <em>&quot;/usr/lib/greyd/greyd_netfilter.so&quot;</em> or <em>&quot;greyd_netfilter.la&quot;</em> are still accepted: the basename is used and the <em>greyd_</em> prefix and <em>.so</em>/<em>.la</em> suffix are ignored. For example:</li></ul>
+<pre><code>    section firewall {
+        #driver = &quot;pf&quot;
+        #driver = &quot;dummy&quot;
+        driver = &quot;netfilter&quot;
+
+        # Driver-specific options below.
+        ...
+    }</code></pre>
+<h3>Netfilter firewall driver</h3>
+<p>This driver runs on GNU/Linux systems and talks to the kernel directly over netlink, making use of <em>ipset</em> for set management, <em>conntrack</em> for original destination lookups and <em>NFLOG</em> for connection tracking. The process holding the firewall handle needs the <em>CAP_NET_ADMIN</em> capability, which <strong>greyd</strong> retains when dropping privileges.</p>
+<ul><li><strong>max_elements</strong> = <em>number</em>: Maximum number of ipset elements. Defaults to <em>200,000</em>.</li><li><strong>hash_size</strong> = <em>number</em>: Maximum ipset hash size for each set.</li><li><strong>track_outbound</strong> = <em>boolean</em>: Track outbound connections. See <strong>greylogd</strong>(8) for more details.</li></ul>
+<h3>NPF firewall driver</h3>
+<p>This driver runs on NetBSD with the NPF firewall. Whitelists are kept in NPF tables declared in <em>npf.conf</em> as dynamic tables (<em>table &lt;greyd-whitelist&gt; type ipset</em>) and replaced in one step with <em>npfctl table ... replace</em>; connections are tracked by reading the <em>npflog0</em> interface with <em>bpf</em> (its records have the <em>pflog</em> layout). NPF offers no public lookup of a redirected connection&#x27;s original destination, so the address the connection arrived on is used; the low priority MX trap therefore only works for connections that are not redirected. <em>npfctl</em> needs the NPF device, so the process holding this driver keeps its privileges.</p>
+<ul><li><strong>npfctl_path</strong> = <em>string</em>: Path to the npfctl utility, defaults to <em>/sbin/npfctl</em>.</li><li><strong>npflog_if</strong> = <em>string</em>: The npflog interface to read logged packets from, defaults to <em>npflog0</em> (create it with <em>ifconfig npflog0 create</em> and log rules with <em>apply &quot;log&quot;</em> in <em>npf.conf</em>).</li><li><strong>net_if</strong> = <em>string</em>: As for the pf driver.</li><li><strong>track_outbound</strong> = <em>boolean</em>: Track outbound connections. See <strong>greylogd</strong>(8) for more details.</li><li><strong>inbound_group</strong> = <em>number</em>: The <em>--nflog-group</em> to indicate inbound SMTP connections.</li><li><strong>outbound_group</strong> = <em>number</em>: The <em>--nflog-group</em> to indicate outbound SMTP connections.</li></ul>
+<h3>PF firewall driver</h3>
+<p>This driver runs on BSD systems making use of the PF firewall. Tables are replaced through <em>pfctl</em>, logged packets are read directly from the <em>bpf</em> device attached to the <em>pflog</em> interface, and original destination lookups use the <em>DIOCNATLOOK</em> ioctl (OpenBSD, FreeBSD and DragonFly BSD; on NetBSD the proxy address is returned).</p>
+<ul><li><strong>pfdev_path</strong> = <em>string</em>: Path to pfdev, defaults to <em>/dev/pf</em>.</li><li><strong>pfctl_path</strong> = <em>string</em>: Path to pfctl utility, defaults to <em>/sbin/pfctl</em>.</li><li><strong>pflog_if</strong> = <em>string</em>: Pflog interface to listen for logged packets, defaults to <em>pflog0</em>.</li></ul>
+<h3>IPFW firewall driver</h3>
+<p>This driver runs on FreeBSD with the <em>ipfw</em> firewall. Whitelists are kept in ipfw lookup tables (<em>type addr</em>, holding IPv4 and IPv6 prefixes) which are replaced atomically: the entries are loaded into a staging table named after the set with <em>_new</em> appended and swapped into place with <em>ipfw table swap</em>. Connections are tracked by reading the <em>ipfw0</em> log interface with <em>bpf</em>; the original destination of a redirected connection is the address the connection arrived on, since <em>ipfw fwd</em> delivers the packet to the local socket without rewriting it. The ipfw control socket checks privileges on every operation, so the process holding this driver keeps them (see PRIVILEGE SEPARATION AND SANDBOXING in <strong>greyd</strong>(8)).</p>
+<ul><li><strong>ipfw_path</strong> = <em>string</em>: Path to the ipfw utility, defaults to <em>/sbin/ipfw</em>.</li><li><strong>ipfw_log_if</strong> = <em>string</em>: The ipfw log interface to read logged packets from, defaults to <em>ipfw0</em>. Create it with <em>ifconfig ipfw0 create</em> and set <em>net.inet.ip.fw.verbose</em> to <em>0</em> so that logged packets go to the interface rather than to syslog.</li><li><strong>net_if</strong> = <em>string</em>: When set, only the addresses of this interface count as local when deciding whether a logged SMTP connection is inbound (whitelist its source) or outbound (whitelist its destination). Defaults to all interfaces.</li><li><strong>track_outbound</strong> = <em>boolean</em>: Track outbound connections. See <strong>greylogd</strong>(8) for more details.</li><li><strong>net_if</strong> = <em>string</em>: Network interface to restrict monitored logged packets to. Not set by default.</li></ul>
+<h2>DATABASE SECTION</h2>
+<p>The following options are common to all database drivers:</p>
+<ul><li><strong>driver</strong> = <em>string</em>: The name of the database driver to use. All drivers are compiled into the programs and are selected by name. May be one of <em>sqlite</em>, <em>mysql</em>, <em>postgresql</em>, <em>bolt</em> or <em>memory</em>. Legacy values from previous releases such as <em>&quot;/usr/lib/greyd/greyd_sqlite.so&quot;</em> or <em>&quot;greyd_sqlite.la&quot;</em> are still accepted: the basename is used, the <em>greyd_</em> prefix and <em>.so</em>/<em>.la</em> suffix are ignored, and the former <em>bdb</em> and <em>bdb_sql</em> drivers map to <em>bolt</em>. For example:</li></ul>
+<pre><code>    section database {
+        driver = &quot;bolt&quot;
+        #driver = &quot;sqlite&quot;
+        #driver = &quot;mysql&quot;
+        #driver = &quot;postgresql&quot;
+        #driver = &quot;memory&quot;
+
+        # Driver-specific options below.
+        ...
+    }</code></pre>
+<h3>Bolt database driver</h3>
+<p>The bolt driver is an embedded, transactional key/value store (bbolt) written in pure Go, which replaces the Berkeley DB drivers of previous releases. It needs no external libraries or services. Note that existing Berkeley DB database files are not readable by this driver; as the database only holds short-lived greylisting state, it is simply rebuilt.</p>
+<ul><li><strong>path</strong> = <em>string</em>: The filesystem path to the directory containing the database file. Defaults to <em>/var/db/greyd</em>.</li><li><strong>db_name</strong> = <em>string</em>: The name of the database file, relative to the specified <strong>path</strong>. Defaults to <em>greyd.db</em>.</li></ul>
+<h3>SQLite database driver</h3>
+<p>The SQLite database driver uses an embedded SQLite implementation. No special initialization is required as the driver will manage the schema internally.</p>
+<ul><li><strong>path</strong> = <em>string</em>: The filesystem path to the directory containing the database files. Defaults to <em>/var/db/greyd</em>.</li><li><strong>db_name</strong> = <em>string</em>: The name of the database file, relative to the specified <strong>path</strong>. Defaults to <em>greyd.sqlite</em>.</li></ul>
+<h3>MySQL database driver</h3>
+<p>The MySQL driver connects to a MySQL (or MariaDB) server. The schema is created automatically on first use; it is also shipped as <strong>mysql_schema.sql</strong> with the source distribution for those who prefer to create it by hand.</p>
+<ul><li><strong>host</strong> = <em>string</em>: The database host. Defaults to <em>localhost</em>.</li><li><strong>port</strong> = <em>number</em>: The database port. Defaults to 3306.</li><li><strong>name</strong> = <em>string</em>: The database name. Defaults to <em>greyd</em>.</li><li><strong>user</strong> = <em>string</em>: The database username.</li><li><strong>pass</strong> = <em>string</em>: The database password.</li><li><strong>socket</strong> = <em>string</em>: The path to the UNIX domain socket.</li></ul>
+<h3>PostgreSQL database driver</h3>
+<p>The PostgreSQL driver connects to a PostgreSQL server. The schema is created automatically on first use; it is also shipped as <strong>postgresql_schema.sql</strong> with the source distribution for those who prefer to create it by hand.</p>
+<ul><li><strong>host</strong> = <em>string</em>: The database host. Defaults to <em>localhost</em>.</li><li><strong>port</strong> = <em>number</em>: The database port. Defaults to 5432.</li><li><strong>name</strong> = <em>string</em>: The database name. Defaults to <em>greyd</em>.</li><li><strong>user</strong> = <em>string</em>: The database username.</li><li><strong>pass</strong> = <em>string</em>: The database password.</li><li><strong>socket</strong> = <em>string</em>: The path to the UNIX domain socket.</li></ul>
+<h3>Memory database driver</h3>
+<p>The memory driver keeps the database in the memory of the greylisting process. Nothing is persisted, so all state is lost when the process exits. It is intended for testing and for ephemeral container deployments.</p>
+<ul><li><strong>name</strong> = <em>string</em>: The name identifying the in-process database. Defaults to <em>default</em>.</li></ul>
+<h2>GREY SECTION</h2>
+<ul><li><strong>enable</strong> = <em>boolean</em>: Enable/disable the greylisting engine. Defaults to <em>1</em>.</li><li><strong>user</strong> = <em>string</em>: The username to run as for the greylisting processes. Defaults to <em>greydb</em>. This should differ from the <em>user</em> that the main <strong>greyd</strong> process is running as.</li><li><strong>traplist_name</strong> = <em>string</em>: The name of the blacklist to which spamtrapped hosts are added.</li><li><strong>traplist_message</strong> = <em>string</em>: The blacklist rejection message. See the <em>message</em> field in BLACKLIST CONFIGURATION.</li><li><strong>whitelist_name</strong> = <em>string</em>: The firewall whitelist <em>set/table</em> name. Defaults to <em>greyd-whitelist</em>.</li><li><strong>whitelist_name_ipv6</strong> = <em>string</em>: The firewall whitelist <em>set/table</em> name for IPv6 hosts. Defaults to <em>greyd-whitelist-ipv6</em>.</li><li><strong>low_prio_mx</strong> = <em>string</em>: The address of the secondary MX server, to greytrap hosts attempting to deliver spam to the MX servers in the incorrect order.</li><li><strong>stutter</strong> = <em>number</em>: Kill stutter for new grey connections after so many seconds. Defaults to <em>10</em>.</li><li><strong>permitted_domains</strong> = <em>string</em>: Filesystem location of the domains allowed to receive mail. If this file is specified (and exists), any message received with a RCPT TO domain <em>not</em> matching an entry in the below file will be greytrapped (ie blacklisted).</li><li><strong>db_permitted_domains</strong> = <em>boolean</em>: Augment <em>permitted_domains</em> (or replace if <em>permitted_domains</em> is not set) with DOMAIN entries loaded into the database. See <strong>greydb</strong>(8) for more on managing these database permitted domains.</li><li><strong>pass_time</strong> = <em>number</em>: The amount of time in seconds after which to whitelist grey entries. Defaults to <em>25 minutes</em>.</li><li><strong>grey_expiry</strong> = <em>number</em>: The amount of time in seconds after which to remove grey entries. Defaults to <em>4 hours</em>.</li><li><strong>white_expiry</strong> = <em>number</em>: The amount of time in seconds after which to remove whitelisted entries. Defaults to <em>31 days</em>.</li><li><strong>trap_expiry</strong> = <em>number</em>: The amount of time in seconds after which to remove greytrapped entries. Defaults to <em>1 day</em>.</li><li><strong>max_domains</strong> = <em>number</em>: The maximum number of entries read from the <em>permitted_domains</em> file; a longer file is truncated with a warning. Defaults to <em>100000</em>, <em>0</em> disables the limit.</li></ul>
+<h2>SYNCHRONISATION SECTION</h2>
+<ul><li><strong>enable</strong> = <em>boolean</em>: Enable/disable the synchronisation engine. Defaults to <em>0</em>.</li><li><strong>hosts</strong> = <em>list</em>: Specify a list of <em>sync targets</em>. See the <strong>-Y</strong> option in <strong>greyd</strong>(8).</li><li><strong>bind_address</strong> = <em>string</em>: See <strong>-y</strong> option in <strong>greyd</strong>(8).</li><li><strong>port</strong> = <em>number</em>: The port on which to listen for incoming UDP sync messages.</li><li><strong>ttl</strong> = <em>number</em>: Specify a multicast TTL value. Defaults to <em>1</em>.</li><li><strong>verify</strong> = <em>boolean</em>: Load the specified <em>key</em> for verifying sync messages.</li><li><strong>key</strong> = <em>string</em>: The filesystem path to the key used to verify sync messages.</li><li><strong>mcast_address</strong> = <em>string</em>: The multicast group address for sync messages.</li><li><strong>replay_window</strong> = <em>number</em>: Sync messages carry a counter; a message whose counter has already been seen from the same peer within the last <em>replay_window</em> counters is dropped, which defeats replayed captures. Defaults to <em>64</em>, <em>0</em> disables the check (needed when peers do not use monotonic counters). State is kept for at most 1024 peers; beyond that the least recently heard peer is forgotten.</li></ul>
+<h2>SPF SECTION</h2>
+<p>This section controls the operation of the SPF validation functionality. SPF support is always built in.</p>
+<ul><li><strong>enable</strong> = <em>boolean</em>: Enable the SPF checking functionality.</li><li><strong>trap_on_softfail</strong> = <em>boolean</em>: Trap a host producing an SPF softfail. SPF hardfails are always trapped.</li><li><strong>whitelist_on_pass</strong> = <em>boolean</em>: Whitelist a host which passes SPF validation. This is disabled by default.</li></ul>
+<h2>MONITOR SECTION</h2>
+<p>This section controls <strong>greyd-monitor</strong>(8), the Prometheus exporter.</p>
+<ul><li><strong>bind_address</strong> = <em>string</em>: The address to serve metrics on. Defaults to <em>127.0.0.1</em>; set it to an interface address to let a remote Prometheus scrape it.</li><li><strong>port</strong> = <em>number</em>: The metrics port. Defaults to <em>9143</em>.</li><li><strong>interval</strong> = <em>number</em>: How often, in seconds, <strong>greyd-monitor</strong> polls <strong>greyd</strong> for its counters. Defaults to <em>30</em>.</li><li><strong>user</strong> = <em>string</em>: The user <strong>greyd-monitor</strong> drops to when started as root. Defaults to the main <em>user</em>, which the configuration socket admits.</li></ul>
+<h2>SETUP SECTION</h2>
+<p>This section controls the operation of the <strong>greyd-setup</strong>(8) program.</p>
+<ul><li><strong>lists</strong> = <em>list</em>: The list of blacklists/whitelists to load. The order is important, see BLACKLIST CONFIGURATION. Consecutive blacklists will be merged, with overlapping regions removed. If a blacklist (or series of blacklists) is followed by a whitelist, any address appearing on both will be removed.</li><li><strong>curl_path</strong> = <em>string</em>: The path to the <em>curl</em> program, which is used to fetch the lists via <em>HTTP</em> and <em>FTP</em>.</li><li><strong>max_entries</strong> = <em>number</em>: The maximum number of addresses read from a single list; the remainder is dropped with a warning. Defaults to <em>10000000</em>.</li><li><strong>curl_proxy</strong> = <em>string</em>: Specify a <em>proxyhost[:port]</em> through which to fetch the lists.</li></ul>
+<h2>BLACKLIST CONFIGURATION</h2>
+<p>A blacklist must contain the following fields:</p>
+<ul><li><strong>message</strong> = <em>string</em>: The message to be sent to <strong>greyd</strong>(8). This message will be displayed to clients who are on this list.</li><li><strong>method</strong> = <em>string</em>: The method in which the list of addresses is fetched. This may be one of <em>http</em>, <em>ftp</em>, <em>exec</em> or <em>file</em>.</li><li><strong>file</strong> = <em>string</em>: The argument to the specified <em>method</em>. For example, if the <em>http</em> method is specified, the <em>file</em> refers to the URL (minus the protocol).</li></ul>
+<p>An example blacklist definition is as follows:</p>
+<pre><code>blacklist nixspam {
+    message = &quot;Your address %A is in the nixspam list&quot;
+    method  = &quot;http&quot;
+    file = &quot;www.openbsd.org/spamd/nixspam.gz&quot;
+}</code></pre>
+<h3>Whitelist definitions</h3>
+<p>Whitelist definitions take the same fields as a blacklist definition, with the exception of the <em>message</em> (which is not applicable). For example:</p>
+<pre><code>whitelist work_clients {
+    method = &quot;exec&quot;
+    file = &quot;cat /tmp/work-clients-traplist.gz&quot;
+}</code></pre>
+<h3>Address format</h3>
+<p>The format of the list of addresses is expected to consist of one network block or address per line (optionally followed by a space and text that is ignored). Comment lines beginning with # are ignored. Network blocks may be specified in any of the formats as in the following example:</p>
+<pre><code># CIDR format
+192.168.20.0/24
+# A start - end range
+192.168.21.0 - 192.168.21.255
+# As a single IP address
+192.168.23.1</code></pre>
+<p>Note, currently only IPv4 addresses are supported.</p>
+<h2>COPYRIGHT</h2>
+<p><strong>greyd</strong> is Copyright (C) 2015 Mikey Austin (greyd.org)</p>
+<h2>SEE ALSO</h2>
+<p><strong>greyd</strong>(8), <strong>greyd-setup</strong>(8), <strong>greydb</strong>(8), <strong>greylogd</strong>(8)</p></div></section>
+</main>
+<footer>
+<section><div class="content">
+<p>Copyright &copy; 2014-2026 Mikey Austin. greyd is free software under the ISC licence.
+<a href="https://github.com/mikey-austin/greyd-v2">Source on GitHub</a>.</p>
+</div></section>
+</footer>
+</body>
+</html>

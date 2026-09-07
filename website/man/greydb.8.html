@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>greydb(8) - greyd</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="greyd - a greylisting and blacklisting spam deferral daemon, a Go port of OpenBSD spamd.">
+<link rel="stylesheet" href="../css/screen.css">
+<script defer src="../js/site.js"></script>
+</head>
+<body>
+<header class="group">
+<h1 class="logo"><a href="../index.html">grey<span>d</span></a></h1>
+<a class="menuControl expand" href="#">+</a>
+<a class="menuControl collapse" href="#">-</a>
+<nav><ul><li><a href="../index.html">home</a></li><li class="active"><a href="../docs.html">docs</a></li><li><a href="../downloads.html">downloads</a></li><li><a href="../code.html">code</a></li></ul></nav>
+</header>
+<main>
+<section><div class="content manpage"><h1>greydb(8)</h1><p class="tagline">greyd database tool</p>
+<h2>SYNOPSIS</h2>
+<p><code>greydb</code> [<strong>-f</strong> config] [<strong>-s</strong>] [[<strong>-TDt</strong>] <strong>-a</strong> keys] [[<strong>-TDt</strong>] <strong>-d</strong> keys] [<strong>-Y</strong> synctarget]</p>
+<h2>DESCRIPTION</h2>
+<p><strong>greydb</strong> manipulates the <strong>greyd</strong> database used for <strong>greyd</strong>(8).</p>
+<p>The options are as follows:</p>
+<ul><li><strong>-f</strong> <em>config</em>:</li></ul>
+<p>The main greyd configuration file.</p>
+<ul><li><strong>-a</strong> <em>keys</em>:</li></ul>
+<p>Add or update the entries for keys. This can be used to whitelist one or more IP addresses (i.e. circumvent the greylisting process altogether) by adding all IP addresses as keys to the <strong>greyd</strong> database for WHITE entries. If any keys specified match entries already in the <strong>greyd</strong> database, <strong>greydb</strong> updates the entry&#x27;s time last seen to now.</p>
+<ul><li><strong>-d</strong> <em>keys</em>:</li></ul>
+<p>Delete entries for keys.</p>
+<ul><li><strong>-T</strong>:</li></ul>
+<p>Add or delete the keys as SPAMTRAP entries. See the GREYTRAPPING section of <strong>greyd</strong>(8) for more information. Must be used in conjunction with the <strong>-a</strong> or <strong>-d</strong> option.</p>
+<ul><li><strong>-D</strong>:</li></ul>
+<p>Add or delete the keys as permitted DOMAIN entries. See the GREYTRAPPING section of <strong>greyd</strong>(8) for more information. Must be used in conjunction with the <strong>-a</strong> or <strong>-d</strong> option.</p>
+<ul><li><strong>-t</strong>:</li></ul>
+<p>Add or delete the keys as TRAPPED entries. See the GREYTRAPPING section of <strong>greyd</strong>(8) for more information. Must be used in conjunction with the <strong>-a</strong> or <strong>-d</strong> option.</p>
+<ul><li><strong>-Y</strong> <em>synctarget</em>: Add a target to receive synchronisation messages; see SYNCHRONISATION below. This option can be specified multiple times.</li><li><strong>-s</strong>: Print a summary instead of the listing: the number of GREY, WHITE, TRAPPED, SPAMTRAP and DOMAIN entries, one per line.</li></ul>
+<p>Keys are written in transactions of up to a thousand, so long lists load quickly; a key that fails (an invalid address, or a deletion of an entry that does not exist) is reported and the others still go through. The exit status is the number of failed keys.</p>
+<p>If adding or deleting a SPAMTRAP address (<strong>-T</strong>), keys should be specified as email addresses:</p>
+<pre><code>spamtrap@mydomain.org</code></pre>
+<p>If adding or deleting a DOMAIN entries (<strong>-D</strong>), keys should be specified as domains/email addresses:</p>
+<pre><code>allowed-domain.org
+@another-allowed-domain.org
+individual@greyd.org</code></pre>
+<p>Otherwise keys must be numerical IP addresses.</p>
+<h2>DATABASE OUTPUT FORMAT</h2>
+<p>If invoked without any arguments, <strong>greydb</strong> lists the contents of the database in a text format.</p>
+<p>For SPAMTRAP and DOMAIN entries the format is:</p>
+<pre><code>type|mailaddress</code></pre>
+<p>where type will be SPAMTRAP and mailaddress will be the email address for which any connections received by <strong>greyd</strong>(8) will be blacklisted if mail is sent to this address.</p>
+<p>For TRAPPED entries the format is:</p>
+<pre><code>type|ip|expire</code></pre>
+<p>where <em>type</em> will be TRAPPED, IP will be the IP address blacklisted due to hitting a spamtrap, and <em>expire</em> will be when the IP is due to be removed from the blacklist.</p>
+<p>For GREY entries, the format is:</p>
+<pre><code>type|source IP|helo|from|to|first|pass|expire|block|pass</code></pre>
+<p>For WHITE entries, the format is:</p>
+<pre><code>type|source IP|||first|pass|expire|block|pass</code></pre>
+<p>The fields are as follows:</p>
+<ul><li><strong>type</strong>: WHITE if whitelisted or GREY if greylisted</li><li><strong>source IP</strong>: IP address the connection originated from</li><li><strong>helo</strong>: what the connecting host sent as identification in the HELO/EHLO command in the SMTP dialogue</li><li><strong>from</strong>: envelope-from address for GREY (empty for WHITE entries)</li><li><strong>to</strong>: envelope-to address for GREY (empty for WHITE entries)</li><li><strong>first</strong>: time the entry was first seen</li><li><strong>pass</strong>: time the entry passed from being GREY to being WHITE</li><li><strong>expire</strong>: time the entry will expire and be removed from the database</li><li><strong>block</strong>: number of times a corresponding connection received a temporary failure from <strong>greyd</strong>(8)</li><li><strong>pass</strong>: number of times a corresponding connection has been seen to pass to the real MTA by <strong>greylogd</strong>(8)</li></ul>
+<p>Note that times are in seconds since the Epoch, in the manner returned by time(3). Times may be converted to human readable format using:</p>
+<pre><code>$ date --date &#x27;@&lt;value&gt;&#x27;</code></pre>
+<h2>SYNCHRONISATION</h2>
+<p><strong>greydb</strong> supports realtime synchronisation of added entries by sending the information it updates to a number of <strong>greyd</strong>(8) daemons running on multiple machines. To enable synchronisation, use the command line option -Y to specify the machines to which <strong>greydb</strong> will send messages. The synchronisation may also be configured entirely via <strong>greyd.conf</strong>(5). For more information, see <strong>greyd</strong>(8) and <strong>greyd.conf</strong>(5).</p>
+<p><strong>greydb</strong> only sends sync messages for additions/deletions of WHITE &amp; TRAPPED entries only.</p>
+<h2>COPYRIGHT</h2>
+<p><strong>greydb</strong> is Copyright (C) 2015 Mikey Austin (greyd.org)</p>
+<h2>SEE ALSO</h2>
+<p><strong>greyd.conf</strong>(5), <strong>greyd-setup</strong>(8), <strong>greyd</strong>(8), <strong>greylogd</strong>(8)</p>
+<h2>CREDITS</h2>
+<p>Much of this man page was taken from the <em>OpenBSD</em> manual, and adapted accordingly.</p></div></section>
+</main>
+<footer>
+<section><div class="content">
+<p>Copyright &copy; 2014-2026 Mikey Austin. greyd is free software under the ISC licence.
+<a href="https://github.com/mikey-austin/greyd-v2">Source on GitHub</a>.</p>
+</div></section>
+</footer>
+</body>
+</html>
