@@ -30,7 +30,13 @@
         DNS and its database server. Packages (deb, rpm), signed release
         archives with SBOMs, a coverage gate, Dependabot, an architecture
         document and an end to end integration harness (Linux container
-        and OpenBSD VM) round out the tooling.
+        and OpenBSD VM) round out the tooling. The harness found and fixed
+        three defects of the port: the netfilter firewall process crashed
+        after dropping privileges (keep-caps was set on one thread only,
+        and the capability set was narrowed before the drop), multi-line
+        blacklist replies written without stuttering used bare LF line
+        endings, and the pf driver's pfctl could not reopen /dev/pf once
+        unprivileged (it now receives the open descriptor as /dev/fd/3).
 
 2026-09-06
         greyd has been ported from C to Go. The four programs, their command

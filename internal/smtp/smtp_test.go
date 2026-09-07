@@ -157,34 +157,34 @@ func TestSummaryTruncationAndReply(t *testing.T) {
 	}
 
 	c.BuildReply("451")
-	want := "451-You (2001::fad3:1) are on blacklist 2\n" +
-		"451-Your address 2001::fad3:1\n" +
-		"451 is on blacklist 3\n"
+	// Every line is CRLF terminated however the reply is written.
+	want := "451-You (2001::fad3:1) are on blacklist 2\r\n" +
+		"451-Your address 2001::fad3:1\r\n" +
+		"451 is on blacklist 3\r\n"
 	if string(c.Out) != want {
 		t.Fatalf("reply %q\nwant %q", c.Out, want)
 	}
-	if c.OutRemaining() != 94 {
+	if c.OutRemaining() != 97 {
 		t.Fatalf("remaining %d", c.OutRemaining())
 	}
 
 	// Write without stuttering: clients + tolerance >= max_cons, so the
-	// whole buffer goes out at once, without CRs.
+	// whole buffer goes out at once, CRLF terminated.
 	c.HandleWrite()
 	if rw.out.String() != want {
 		t.Fatalf("unstuttered write %q", rw.out.String())
 	}
 
-	// Write with stuttering: one byte at a time, \r inserted before \n.
+	// Write with stuttering: one byte at a time, same bytes on the wire.
 	rw.out.Reset()
 	c.w = false
 	c.BuildReply("451")
 	h.counters.MaxCons, h.counters.MaxBlack = 100, 100
-	wantCR := strings.ReplaceAll(want, "\n", "\r\n")
-	for rw.out.Len() < len(wantCR) && !c.Closed() {
+	for rw.out.Len() < len(want) && !c.Closed() {
 		c.HandleWrite()
 	}
-	if rw.out.String() != wantCR {
-		t.Fatalf("stuttered write %q\nwant %q", rw.out.String(), wantCR)
+	if rw.out.String() != want {
+		t.Fatalf("stuttered write %q\nwant %q", rw.out.String(), want)
 	}
 	// Each stuttered byte slept for the stutter interval.
 	if h.clock.Now().Sub(fixedNow) < time.Duration(len(want)-1)*time.Second {

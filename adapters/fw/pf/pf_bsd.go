@@ -123,10 +123,8 @@ func (f *Firewall) Close() error {
 }
 
 // Replace atomically replaces the contents of a PF table by feeding the
-// CIDRs to "pfctl -T replace -f -" (Mod_fw_replace). The C driver handed
-// pfctl its already open descriptor as /dev/fd/N; the device path is
-// passed instead, which behaves identically for a privileged caller and
-// does not depend on fdescfs. pfctl is killed when ctx is done.
+// CIDRs to "pfctl -T replace -f -" (Mod_fw_replace). pfctl is killed when
+// ctx is done.
 func (f *Firewall) Replace(ctx context.Context, set string, cidrs []string, _ core.Family) (int, error) {
 	if len(cidrs) == 0 {
 		return 0, nil
@@ -145,7 +143,17 @@ func (f *Firewall) Replace(ctx context.Context, set string, cidrs []string, _ co
 		return 0, nil
 	}
 
-	cmd := exec.CommandContext(ctx, f.pfctlPath, "-p", f.pfdevPath, "-q", "-t", set, "-T", "replace", "-f", "-")
+	// A privileged caller lets pfctl open the device itself; once
+	// privileges are dropped only the descriptor opened at start up
+	// works, handed over as /dev/fd/3 the way the C driver did.
+	dev := f.pfdevPath
+	var extra []*os.File
+	if os.Geteuid() != 0 && f.pfdev != nil {
+		dev = "/dev/fd/3"
+		extra = []*os.File{f.pfdev}
+	}
+	cmd := exec.CommandContext(ctx, f.pfctlPath, "-p", dev, "-q", "-t", set, "-T", "replace", "-f", "-")
+	cmd.ExtraFiles = extra
 	cmd.Stdin = strings.NewReader(in.String())
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

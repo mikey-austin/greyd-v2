@@ -139,6 +139,8 @@ these corners:
     entry, for every database driver (the SQL drivers already behaved this way)
   * a malformed message on an internal pipe or the configuration socket is logged and skipped
     instead of terminating the process
+  * every reply line is CRLF terminated, including multi-line blacklist messages sent
+    without stuttering (the C code emitted bare LF there)
 
 The port also adds a few hardening options, all off or generous by default so existing
 configurations behave as before: `config_socket` (a unix domain socket for **greyd-setup**

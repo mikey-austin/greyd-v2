@@ -37,7 +37,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/florianl/go-nflog/v2"
@@ -132,8 +134,30 @@ func (f *Firewall) Open(context.Context) error {
 	} else if err := caps.SetProc(); err != nil {
 		f.log.Warn("netfilter: cap set proc", "err", err)
 	}
-	if err := unix.Prctl(unix.PR_SET_KEEPCAPS, 1, 0, 0, 0); err != nil {
+	// PR_SET_KEEPCAPS is per thread and the uid change that follows is
+	// applied to every thread, so the flag must be set on all of them or
+	// the threads that lost their capabilities disagree with the rest
+	// (which the runtime treats as corruption on the next all-threads
+	// capability call).
+	if err := keepCaps(true); err != nil {
 		return fmt.Errorf("prctl PR_SET_KEEPCAPS: %w", err)
+	}
+	return nil
+}
+
+// keepCaps sets or clears PR_SET_KEEPCAPS on every thread. Binaries that
+// link cgo cannot broadcast and fall back to the calling thread.
+func keepCaps(on bool) error {
+	var v uintptr
+	if on {
+		v = 1
+	}
+	_, _, e := syscall.AllThreadsSyscall(unix.SYS_PRCTL, unix.PR_SET_KEEPCAPS, v, 0)
+	if e == unix.ENOTSUP {
+		return unix.Prctl(unix.PR_SET_KEEPCAPS, v, 0, 0, 0)
+	}
+	if e != 0 {
+		return e
 	}
 	return nil
 }
@@ -149,7 +173,7 @@ func (f *Firewall) Close() error {
 	if err := cap.NewSet().SetProc(); err != nil {
 		errs = append(errs, fmt.Errorf("clear capabilities: %w", err))
 	}
-	if err := unix.Prctl(unix.PR_SET_KEEPCAPS, 0, 0, 0, 0); err != nil {
+	if err := keepCaps(false); err != nil {
 		errs = append(errs, fmt.Errorf("prctl PR_SET_KEEPCAPS: %w", err))
 	}
 	return errors.Join(errs...)
@@ -159,7 +183,10 @@ func (f *Firewall) Close() error {
 // privileges have been dropped (set_effective_caps). Failure is logged and
 // the operation proceeds; the kernel will then report EPERM.
 func (f *Firewall) raiseCaps() {
-	if !f.opts.dropPrivs {
+	if !f.opts.dropPrivs || os.Geteuid() == 0 {
+		// Still root: every capability is in place, and replacing the
+		// set with CAP_NET_ADMIN alone here would remove the CAP_SETUID
+		// and CAP_SETGID the coming privilege drop needs.
 		return
 	}
 	caps := cap.NewSet()

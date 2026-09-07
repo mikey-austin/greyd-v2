@@ -422,10 +422,25 @@ func (c *Conn) OutRemaining() int { return len(c.Out) - c.outPos }
 
 // setOut queues a reply.
 func (c *Conn) setOut(s string) {
-	c.Out = []byte(s)
+	c.Out = crlf(s)
 	c.outPos = 0
 	c.seenCR = false
 	c.w = true
+}
+
+// crlf terminates every line with CRLF. Replies are assembled with bare
+// newlines (the multi-line blacklist messages in particular); the C code
+// inserted the CR while stuttering byte by byte, which left bare LFs in
+// replies written in one piece.
+func crlf(s string) []byte {
+	out := make([]byte, 0, len(s)+8)
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' && (i == 0 || s[i-1] != '\r') {
+			out = append(out, '\r')
+		}
+		out = append(out, s[i])
+	}
+	return out
 }
 
 // setRead prepares for a new input line.

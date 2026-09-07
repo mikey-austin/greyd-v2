@@ -1,0 +1,58 @@
+name: Integration
+
+on: [push, pull_request]
+
+jobs:
+  # Full netfilter flow (DNAT + conntrack, ipset, NFLOG, greyd-setup over the
+  # unix configuration socket) inside a privileged container; see
+  # packages/integration/run-linux.sh.
+  linux-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: integration harness (privileged docker)
+        run: make test-integration
+
+  # Vet, the whole test tree (pf adapter, pledge sandbox) and a pf/pledge
+  # smoke test in an OpenBSD VM; see packages/integration/run-openbsd.sh.
+  openbsd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: OpenBSD vet, test and smoke test
+        uses: vmactions/openbsd-vm@v1
+        with:
+          release: '7.7'
+          usesh: true
+          sync: rsync
+          copyback: false
+          prepare: |
+            pkg_add -I go || true
+          # The packaged Go may lag behind go.mod: the official openbsd-amd64
+          # tarball of the go.mod toolchain version is installed when the
+          # packaged one differs, so GOTOOLCHAIN=local never has to refuse.
+          run: |
+            set -e
+            export GOFLAGS=-buildvcs=false GOTOOLCHAIN=local
+            want=$(sed -n 's/^toolchain go//p' go.mod)
+            [ -n "$want" ] || want=$(sed -n 's/^go //p' go.mod)
+            have=$(go version 2>/dev/null | sed -n 's/^go version go\([0-9.]*\).*/\1/p')
+            echo "go.mod wants go$want, packaged go is '${have:-none}'"
+            if [ "$have" != "$want" ]; then
+              echo "installing go$want from go.dev"
+              ftp -o /tmp/go.tgz "https://go.dev/dl/go$want.openbsd-amd64.tar.gz"
+              rm -rf /usr/local/go
+              tar -C /usr/local -xzf /tmp/go.tgz
+              ln -sf /usr/local/go/bin/go /usr/local/bin/go
+              ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+              hash -r
+            fi
+            go version
+            echo "== go vet"
+            go vet -unreachable=false ./...
+            echo "== go test"
+            go test ./...
+            echo "== pf / pledge smoke test"
+            sh packages/integration/run-openbsd.sh
