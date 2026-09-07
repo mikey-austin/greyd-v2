@@ -25,10 +25,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mikey-austin/greyd-golang/internal/cli"
-	"github.com/mikey-austin/greyd-golang/internal/config"
-	"github.com/mikey-austin/greyd-golang/internal/smtp"
-	"github.com/mikey-austin/greyd-golang/internal/version"
+	"github.com/mikey-austin/greyd-v2/internal/cli"
+	"github.com/mikey-austin/greyd-v2/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/smtp"
+	"github.com/mikey-austin/greyd-v2/internal/version"
 )
 
 // Usage is the usage text of main_greyd.c.

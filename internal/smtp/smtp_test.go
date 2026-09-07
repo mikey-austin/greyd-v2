@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/internal/blacklist"
-	"github.com/mikey-austin/greyd-golang/internal/config/parse"
-	"github.com/mikey-austin/greyd-golang/internal/core"
-	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/settings"
+	"github.com/mikey-austin/greyd-v2/internal/blacklist"
+	"github.com/mikey-austin/greyd-v2/internal/config/parse"
+	"github.com/mikey-austin/greyd-v2/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/ipc"
+	"github.com/mikey-austin/greyd-v2/internal/settings"
 )
 
 var fixedNow = time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mikey-austin/greyd-golang/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/core"
 )
 
 // FuzzDecode checks the frame codec never panics and only reports the

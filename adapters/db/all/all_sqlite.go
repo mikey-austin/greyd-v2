@@ -19,4 +19,4 @@
 // The sqlite driver is unavailable on DragonFly BSD (no libc port).
 package all
 
-import _ "github.com/mikey-austin/greyd-golang/adapters/db/sqlite"
+import _ "github.com/mikey-austin/greyd-v2/adapters/db/sqlite"

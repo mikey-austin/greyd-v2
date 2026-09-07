@@ -25,12 +25,12 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/privs"
-	"github.com/mikey-austin/greyd-golang/internal/sandbox"
-	"github.com/mikey-austin/greyd-golang/internal/smtp"
-	gsync "github.com/mikey-austin/greyd-golang/internal/sync"
-	"github.com/mikey-austin/greyd-golang/internal/version"
+	"github.com/mikey-austin/greyd-v2/internal/ipc"
+	"github.com/mikey-austin/greyd-v2/internal/privs"
+	"github.com/mikey-austin/greyd-v2/internal/sandbox"
+	"github.com/mikey-austin/greyd-v2/internal/smtp"
+	gsync "github.com/mikey-austin/greyd-v2/internal/sync"
+	"github.com/mikey-austin/greyd-v2/internal/version"
 )
 
 // serve runs the daemon until ctx is done (the rest of main()). The

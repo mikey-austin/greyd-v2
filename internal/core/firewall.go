@@ -21,7 +21,7 @@ import (
 	"log/slog"
 	"net/netip"
 
-	"github.com/mikey-austin/greyd-golang/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/config"
 )
 
 // Family is an IP address family.

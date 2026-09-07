@@ -31,12 +31,12 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mikey-austin/greyd-golang/adapters/fw/dummy"
-	"github.com/mikey-austin/greyd-golang/internal/config"
-	"github.com/mikey-austin/greyd-golang/internal/config/parse"
-	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/logger"
-	"github.com/mikey-austin/greyd-golang/internal/settings"
+	"github.com/mikey-austin/greyd-v2/adapters/fw/dummy"
+	"github.com/mikey-austin/greyd-v2/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/config/parse"
+	"github.com/mikey-austin/greyd-v2/internal/ipc"
+	"github.com/mikey-austin/greyd-v2/internal/logger"
+	"github.com/mikey-austin/greyd-v2/internal/settings"
 )
 
 // frame is one blacklist message received by the fake greyd.

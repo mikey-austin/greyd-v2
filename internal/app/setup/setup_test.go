@@ -23,8 +23,8 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/mikey-austin/greyd-golang/adapters/fw/all"
-	_ "github.com/mikey-austin/greyd-golang/internal/config/parse"
+	_ "github.com/mikey-austin/greyd-v2/adapters/fw/all"
+	_ "github.com/mikey-austin/greyd-v2/internal/config/parse"
 )
 
 const usage = "usage: greyd-setup [-bDdn] [-f config]\n"

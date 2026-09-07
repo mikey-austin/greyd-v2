@@ -26,8 +26,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/internal/procs"
-	"github.com/mikey-austin/greyd-golang/internal/settings"
+	"github.com/mikey-austin/greyd-v2/internal/procs"
+	"github.com/mikey-austin/greyd-v2/internal/settings"
 )
 
 // spawnChildren re-executes the binary as the firewall and greylister

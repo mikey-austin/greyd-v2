@@ -13,7 +13,7 @@
 
 PACKAGE        := greyd
 VERSION        := 1.0.0
-MODULE         := github.com/mikey-austin/greyd-golang
+MODULE         := github.com/mikey-austin/greyd-v2
 
 GO             ?= go
 JAVA           ?= java

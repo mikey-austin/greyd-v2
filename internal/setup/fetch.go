@@ -25,9 +25,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/mikey-austin/greyd-golang/internal/config"
-	"github.com/mikey-austin/greyd-golang/internal/settings"
-	"github.com/mikey-austin/greyd-golang/internal/spamdlist"
+	"github.com/mikey-austin/greyd-v2/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/settings"
+	"github.com/mikey-austin/greyd-v2/internal/spamdlist"
 )
 
 // Fetch methods understood in a list's "method" variable.

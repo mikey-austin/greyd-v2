@@ -20,10 +20,10 @@ package main
 import (
 	"os"
 
-	_ "github.com/mikey-austin/greyd-golang/adapters/db/all"
-	_ "github.com/mikey-austin/greyd-golang/adapters/fw/all"
-	"github.com/mikey-austin/greyd-golang/internal/app/greyd"
-	_ "github.com/mikey-austin/greyd-golang/internal/config/parse"
+	_ "github.com/mikey-austin/greyd-v2/adapters/db/all"
+	_ "github.com/mikey-austin/greyd-v2/adapters/fw/all"
+	"github.com/mikey-austin/greyd-v2/internal/app/greyd"
+	_ "github.com/mikey-austin/greyd-v2/internal/config/parse"
 )
 
 func main() {

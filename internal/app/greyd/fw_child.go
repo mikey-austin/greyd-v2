@@ -26,13 +26,13 @@ import (
 	"os/user"
 	"sync"
 
-	"github.com/mikey-austin/greyd-golang/internal/core"
-	"github.com/mikey-austin/greyd-golang/internal/ip"
-	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/privs"
-	"github.com/mikey-austin/greyd-golang/internal/procs"
-	"github.com/mikey-austin/greyd-golang/internal/sandbox"
-	"github.com/mikey-austin/greyd-golang/internal/settings"
+	"github.com/mikey-austin/greyd-v2/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/ip"
+	"github.com/mikey-austin/greyd-v2/internal/ipc"
+	"github.com/mikey-austin/greyd-v2/internal/privs"
+	"github.com/mikey-austin/greyd-v2/internal/procs"
+	"github.com/mikey-austin/greyd-v2/internal/sandbox"
+	"github.com/mikey-austin/greyd-v2/internal/settings"
 )
 
 // Names of the descriptors passed to the firewall child.

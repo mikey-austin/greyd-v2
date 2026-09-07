@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mikey-austin/greyd-golang/internal/blacklist"
+	"github.com/mikey-austin/greyd-v2/internal/blacklist"
 )
 
 func FuzzParseLimited(f *testing.F) {

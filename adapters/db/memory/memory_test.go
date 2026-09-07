@@ -5,10 +5,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/mikey-austin/greyd-golang/adapters/db/dbtest"
-	"github.com/mikey-austin/greyd-golang/adapters/db/kv"
-	"github.com/mikey-austin/greyd-golang/internal/config"
-	"github.com/mikey-austin/greyd-golang/internal/core"
+	"github.com/mikey-austin/greyd-v2/adapters/db/dbtest"
+	"github.com/mikey-austin/greyd-v2/adapters/db/kv"
+	"github.com/mikey-austin/greyd-v2/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/core"
 )
 
 func TestConformance(t *testing.T) {

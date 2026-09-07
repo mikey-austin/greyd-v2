@@ -214,7 +214,7 @@ OIDC identity. Verify a download with:
 
     $ cosign verify-blob --certificate checksums.txt.pem \
           --signature checksums.txt.sig \
-          --certificate-identity-regexp 'https://github.com/mikey-austin/greyd-golang/' \
+          --certificate-identity-regexp 'https://github.com/mikey-austin/greyd-v2/' \
           --certificate-oidc-issuer https://token.actions.githubusercontent.com \
           checksums.txt
     $ sha256sum -c --ignore-missing checksums.txt

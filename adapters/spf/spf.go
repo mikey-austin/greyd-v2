@@ -26,7 +26,7 @@ import (
 
 	gospf "blitiri.com.ar/go/spf"
 
-	"github.com/mikey-austin/greyd-golang/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/core"
 )
 
 // Timeout bounds a single SPF evaluation.

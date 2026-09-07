@@ -26,7 +26,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/internal/logger"
+	"github.com/mikey-austin/greyd-v2/internal/logger"
 )
 
 // Server accepts SMTP connections and runs a Conn per client.

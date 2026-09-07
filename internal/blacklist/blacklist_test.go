@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/mikey-austin/greyd-golang/internal/ip"
+	"github.com/mikey-austin/greyd-v2/internal/ip"
 )
 
 func stoi(s string) uint32 { return ip.AddrToUint32(netip.MustParseAddr(s)) }

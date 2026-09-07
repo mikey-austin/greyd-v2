@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/internal/core"
-	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/settings"
+	"github.com/mikey-austin/greyd-v2/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/ipc"
+	"github.com/mikey-austin/greyd-v2/internal/settings"
 )
 
 // syncCfg returns sync settings with the documented defaults applied.

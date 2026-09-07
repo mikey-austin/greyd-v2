@@ -22,7 +22,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mikey-austin/greyd-golang/internal/ip"
+	"github.com/mikey-austin/greyd-v2/internal/ip"
 )
 
 // Message types sent to the greylister (grey.h GREY_MSG_*).

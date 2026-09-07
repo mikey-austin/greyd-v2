@@ -26,10 +26,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/adapters/db/memory"
-	_ "github.com/mikey-austin/greyd-golang/internal/config/parse"
-	"github.com/mikey-austin/greyd-golang/internal/grey"
-	"github.com/mikey-austin/greyd-golang/internal/sync"
+	"github.com/mikey-austin/greyd-v2/adapters/db/memory"
+	_ "github.com/mikey-austin/greyd-v2/internal/config/parse"
+	"github.com/mikey-austin/greyd-v2/internal/grey"
+	"github.com/mikey-austin/greyd-v2/internal/sync"
 )
 
 const testNow = int64(1_700_000_000)

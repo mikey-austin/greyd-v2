@@ -28,13 +28,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/internal/blacklist"
-	"github.com/mikey-austin/greyd-golang/internal/config"
-	"github.com/mikey-austin/greyd-golang/internal/core"
-	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/logger"
-	"github.com/mikey-austin/greyd-golang/internal/settings"
-	"github.com/mikey-austin/greyd-golang/internal/spamdlist"
+	"github.com/mikey-austin/greyd-v2/internal/blacklist"
+	"github.com/mikey-austin/greyd-v2/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/ipc"
+	"github.com/mikey-austin/greyd-v2/internal/logger"
+	"github.com/mikey-austin/greyd-v2/internal/settings"
+	"github.com/mikey-austin/greyd-v2/internal/spamdlist"
 )
 
 const (

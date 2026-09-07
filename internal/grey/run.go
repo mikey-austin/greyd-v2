@@ -22,7 +22,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/internal/ipc"
+	"github.com/mikey-austin/greyd-v2/internal/ipc"
 )
 
 // RunReader consumes messages from in until it is closed (Grey_start_reader).

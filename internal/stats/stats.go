@@ -30,10 +30,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/internal/core"
-	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/settings"
-	"github.com/mikey-austin/greyd-golang/internal/setup"
+	"github.com/mikey-austin/greyd-v2/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/ipc"
+	"github.com/mikey-austin/greyd-v2/internal/settings"
+	"github.com/mikey-austin/greyd-v2/internal/setup"
 )
 
 // Counts are the database entry counts by kind.

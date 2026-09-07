@@ -27,7 +27,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mikey-austin/greyd-golang/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/config"
 )
 
 // Global holds the variables of the default section.

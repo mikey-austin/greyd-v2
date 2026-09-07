@@ -21,8 +21,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/mikey-austin/greyd-golang/internal/blacklist"
-	"github.com/mikey-austin/greyd-golang/internal/ip"
+	"github.com/mikey-austin/greyd-v2/internal/blacklist"
+	"github.com/mikey-austin/greyd-v2/internal/ip"
 )
 
 // Error is a positioned parse error.

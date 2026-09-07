@@ -25,7 +25,7 @@ import (
 	"net/netip"
 	"sort"
 
-	"github.com/mikey-austin/greyd-golang/internal/ip"
+	"github.com/mikey-austin/greyd-v2/internal/ip"
 )
 
 // Storage selects the internal representation.

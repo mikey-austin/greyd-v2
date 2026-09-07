@@ -28,7 +28,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/mikey-austin/greyd-golang/internal/activation"
+	"github.com/mikey-austin/greyd-v2/internal/activation"
 )
 
 func reuseAddr(_, _ string, c syscall.RawConn) error {

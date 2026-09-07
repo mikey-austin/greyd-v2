@@ -25,9 +25,9 @@ import (
 	"testing"
 
 	gomysql "github.com/go-sql-driver/mysql"
-	"github.com/mikey-austin/greyd-golang/adapters/db/dbtest"
-	"github.com/mikey-austin/greyd-golang/internal/config"
-	"github.com/mikey-austin/greyd-golang/internal/core"
+	"github.com/mikey-austin/greyd-v2/adapters/db/dbtest"
+	"github.com/mikey-austin/greyd-v2/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/core"
 )
 
 // dsnEnv names the variable holding a go-sql-driver DSN of a throw-away

@@ -23,8 +23,8 @@ import (
 	"net/netip"
 	"sync"
 
-	"github.com/mikey-austin/greyd-golang/internal/config"
-	"github.com/mikey-austin/greyd-golang/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/core"
 )
 
 // DriverName is the configuration driver value.

@@ -24,7 +24,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/mikey-austin/greyd-golang/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/core"
 )
 
 // OpenFunc returns a freshly opened, empty, read-write store. Any cleanup

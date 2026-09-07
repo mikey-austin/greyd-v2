@@ -22,7 +22,7 @@ import (
 	"log/slog"
 	"os/user"
 
-	"github.com/mikey-austin/greyd-golang/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/config"
 )
 
 // KeyType identifies the kind of database key (greydb.h DB_KEY_*).

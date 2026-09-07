@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mikey-austin/greyd-golang/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/config"
 )
 
 func TestNormalizeEmail(t *testing.T) {

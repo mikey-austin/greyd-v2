@@ -36,8 +36,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mikey-austin/greyd-golang/internal/core"
-	"github.com/mikey-austin/greyd-golang/internal/logger"
+	"github.com/mikey-austin/greyd-v2/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/logger"
 )
 
 // ErrNoCurrent is returned by iterator mutations before the first Next or

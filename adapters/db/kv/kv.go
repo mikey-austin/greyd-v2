@@ -26,8 +26,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mikey-austin/greyd-golang/internal/core"
-	"github.com/mikey-austin/greyd-golang/internal/ip"
+	"github.com/mikey-austin/greyd-v2/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/ip"
 )
 
 // Bucket names a logical table.

@@ -24,8 +24,8 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/mikey-austin/greyd-golang/internal/core"
-	"github.com/mikey-austin/greyd-golang/internal/ipc"
+	"github.com/mikey-austin/greyd-v2/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/ipc"
 )
 
 // match reports whether the input starts with the command (case

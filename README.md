@@ -1,7 +1,7 @@
 greyd - greylisting & blacklisting daemon
 ================================================
 
-![Go CI](https://github.com/mikey-austin/greyd-golang/workflows/Go%20CI/badge.svg)
+![Go CI](https://github.com/mikey-austin/greyd-v2/workflows/Go%20CI/badge.svg)
 
 Project Website
 ---------------

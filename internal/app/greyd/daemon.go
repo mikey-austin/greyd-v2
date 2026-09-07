@@ -25,11 +25,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/internal/blacklist"
-	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/privs"
-	"github.com/mikey-austin/greyd-golang/internal/settings"
-	"github.com/mikey-austin/greyd-golang/internal/smtp"
+	"github.com/mikey-austin/greyd-v2/internal/blacklist"
+	"github.com/mikey-austin/greyd-v2/internal/ipc"
+	"github.com/mikey-austin/greyd-v2/internal/privs"
+	"github.com/mikey-austin/greyd-v2/internal/settings"
+	"github.com/mikey-austin/greyd-v2/internal/smtp"
 )
 
 // mainFiles are the parent's pipe ends.

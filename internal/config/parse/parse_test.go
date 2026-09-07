@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mikey-austin/greyd-golang/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/config"
 )
 
 const parserSrc = "test_var_1    =  12345 # This is a comment \n" +

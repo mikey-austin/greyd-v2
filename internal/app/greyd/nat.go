@@ -20,7 +20,7 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/internal/ipc"
+	"github.com/mikey-austin/greyd-v2/internal/ipc"
 )
 
 // natLookupTimeout bounds a firewall NAT lookup (DNAT_LOOKUP_TIMEOUT).

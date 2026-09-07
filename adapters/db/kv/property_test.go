@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/mikey-austin/greyd-golang/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/core"
 )
 
 // TestCodecRoundTripProperty encodes and decodes keys and data across the

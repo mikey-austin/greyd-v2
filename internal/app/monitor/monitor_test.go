@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mikey-austin/greyd-golang/internal/config/parse"
-	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/settings"
+	"github.com/mikey-austin/greyd-v2/internal/config/parse"
+	"github.com/mikey-austin/greyd-v2/internal/ipc"
+	"github.com/mikey-austin/greyd-v2/internal/settings"
 )
 
 // fakeGreyd answers statistics requests on a unix socket.

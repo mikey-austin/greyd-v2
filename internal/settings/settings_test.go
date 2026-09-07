@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mikey-austin/greyd-golang/internal/config/parse"
+	"github.com/mikey-austin/greyd-v2/internal/config/parse"
 )
 
 func TestDefaults(t *testing.T) {

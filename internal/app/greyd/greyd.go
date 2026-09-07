@@ -28,14 +28,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/internal/config"
-	"github.com/mikey-austin/greyd-golang/internal/core"
-	"github.com/mikey-austin/greyd-golang/internal/logger"
-	"github.com/mikey-austin/greyd-golang/internal/privs"
-	"github.com/mikey-austin/greyd-golang/internal/procs"
-	"github.com/mikey-austin/greyd-golang/internal/settings"
-	"github.com/mikey-austin/greyd-golang/internal/stats"
-	"github.com/mikey-austin/greyd-golang/internal/version"
+	"github.com/mikey-austin/greyd-v2/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/logger"
+	"github.com/mikey-austin/greyd-v2/internal/privs"
+	"github.com/mikey-austin/greyd-v2/internal/procs"
+	"github.com/mikey-austin/greyd-v2/internal/settings"
+	"github.com/mikey-austin/greyd-v2/internal/stats"
+	"github.com/mikey-austin/greyd-v2/internal/version"
 )
 
 // Child process roles.

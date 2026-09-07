@@ -61,10 +61,10 @@ builds:
     ldflags:
       - >-
         -s -w
-        -X github.com/mikey-austin/greyd-golang/internal/version.Version={{ .Version }}
-        -X github.com/mikey-austin/greyd-golang/internal/version.DefaultConfig=/etc/greyd/greyd.conf
-        -X github.com/mikey-austin/greyd-golang/internal/version.GreydPidfile=/var/empty/greyd/greyd.pid
-        -X github.com/mikey-austin/greyd-golang/internal/version.GreylogdPidfile=/var/empty/greylogd/greylogd.pid
+        -X github.com/mikey-austin/greyd-v2/internal/version.Version={{ .Version }}
+        -X github.com/mikey-austin/greyd-v2/internal/version.DefaultConfig=/etc/greyd/greyd.conf
+        -X github.com/mikey-austin/greyd-v2/internal/version.GreydPidfile=/var/empty/greyd/greyd.pid
+        -X github.com/mikey-austin/greyd-v2/internal/version.GreylogdPidfile=/var/empty/greylogd/greylogd.pid
     mod_timestamp: "{{ .CommitTimestamp }}"
   - <<: *build_defaults
     id: greydb
@@ -239,7 +239,7 @@ sboms:
 # id-token: write for it. Verify with:
 #   cosign verify-blob --certificate checksums.txt.pem \
 #       --signature checksums.txt.sig \
-#       --certificate-identity-regexp 'https://github.com/mikey-austin/greyd-golang/' \
+#       --certificate-identity-regexp 'https://github.com/mikey-austin/greyd-v2/' \
 #       --certificate-oidc-issuer https://token.actions.githubusercontent.com \
 #       checksums.txt
 signs:
@@ -274,7 +274,7 @@ changelog:
 release:
   github:
     owner: mikey-austin
-    name: greyd-golang
+    name: greyd-v2
   prerelease: auto
   footer: |
     The checksums.txt file is signed with cosign (keyless); the .sig and

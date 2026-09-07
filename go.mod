@@ -1,4 +1,4 @@
-module github.com/mikey-austin/greyd-golang
+module github.com/mikey-austin/greyd-v2
 
 go 1.25.0
 

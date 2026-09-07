@@ -26,14 +26,14 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/adapters/spf"
-	"github.com/mikey-austin/greyd-golang/internal/core"
-	"github.com/mikey-austin/greyd-golang/internal/grey"
-	"github.com/mikey-austin/greyd-golang/internal/privs"
-	"github.com/mikey-austin/greyd-golang/internal/procs"
-	"github.com/mikey-austin/greyd-golang/internal/sandbox"
-	"github.com/mikey-austin/greyd-golang/internal/settings"
-	gsync "github.com/mikey-austin/greyd-golang/internal/sync"
+	"github.com/mikey-austin/greyd-v2/adapters/spf"
+	"github.com/mikey-austin/greyd-v2/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/grey"
+	"github.com/mikey-austin/greyd-v2/internal/privs"
+	"github.com/mikey-austin/greyd-v2/internal/procs"
+	"github.com/mikey-austin/greyd-v2/internal/sandbox"
+	"github.com/mikey-austin/greyd-v2/internal/settings"
+	gsync "github.com/mikey-austin/greyd-v2/internal/sync"
 )
 
 // Names of the descriptors passed to the greylister child.

@@ -30,11 +30,13 @@ jobs:
     - uses: actions/setup-go@v5
       with:
         go-version: '1.25'
-    # Configuration is in .golangci.yml (v2 format; action v7 expects v2).
+    # Configuration is in .golangci.yml (v2 format). The version is pinned
+    # to the one "make tools" installs, so CI and developers see the same
+    # findings; bump both together.
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v7
       with:
-        version: latest
+        version: v2.5.0
     - name: govulncheck
       uses: golang/govulncheck-action@v1
       with:

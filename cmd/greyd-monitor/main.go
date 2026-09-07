@@ -21,8 +21,8 @@ package main
 import (
 	"os"
 
-	"github.com/mikey-austin/greyd-golang/internal/app/monitor"
-	_ "github.com/mikey-austin/greyd-golang/internal/config/parse"
+	"github.com/mikey-austin/greyd-v2/internal/app/monitor"
+	_ "github.com/mikey-austin/greyd-v2/internal/config/parse"
 )
 
 func main() {

@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/internal/ipc"
+	"github.com/mikey-austin/greyd-v2/internal/ipc"
 )
 
 // scanStats keeps the latest database counts sent by the greylister.

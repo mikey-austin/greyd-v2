@@ -30,11 +30,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/adapters/db/memory"
-	"github.com/mikey-austin/greyd-golang/internal/config"
-	_ "github.com/mikey-austin/greyd-golang/internal/config/parse"
-	"github.com/mikey-austin/greyd-golang/internal/core"
-	"github.com/mikey-austin/greyd-golang/internal/logger"
+	"github.com/mikey-austin/greyd-v2/adapters/db/memory"
+	"github.com/mikey-austin/greyd-v2/internal/config"
+	_ "github.com/mikey-austin/greyd-v2/internal/config/parse"
+	"github.com/mikey-austin/greyd-v2/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/logger"
 )
 
 func TestParseFlags(t *testing.T) {

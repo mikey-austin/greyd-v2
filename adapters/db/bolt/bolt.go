@@ -39,10 +39,10 @@ import (
 
 	bbolt "go.etcd.io/bbolt"
 
-	"github.com/mikey-austin/greyd-golang/adapters/db/kv"
-	"github.com/mikey-austin/greyd-golang/internal/config"
-	"github.com/mikey-austin/greyd-golang/internal/core"
-	"github.com/mikey-austin/greyd-golang/internal/logger"
+	"github.com/mikey-austin/greyd-v2/adapters/db/kv"
+	"github.com/mikey-austin/greyd-v2/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/logger"
 )
 
 // DriverName is the configuration driver value.

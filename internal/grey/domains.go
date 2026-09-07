@@ -22,7 +22,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mikey-austin/greyd-golang/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/core"
 )
 
 // ErrTooManyDomains is returned when the permitted domains file holds more

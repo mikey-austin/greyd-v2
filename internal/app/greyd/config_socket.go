@@ -25,8 +25,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/peercred"
+	"github.com/mikey-austin/greyd-v2/internal/ipc"
+	"github.com/mikey-austin/greyd-v2/internal/peercred"
 )
 
 // cfgConnTimeout bounds reading a blacklist from a configuration

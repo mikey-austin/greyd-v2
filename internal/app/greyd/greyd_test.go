@@ -14,17 +14,17 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/mikey-austin/greyd-golang/adapters/db/all"
-	"github.com/mikey-austin/greyd-golang/adapters/db/memory"
-	_ "github.com/mikey-austin/greyd-golang/adapters/fw/all"
-	"github.com/mikey-austin/greyd-golang/internal/config"
-	"github.com/mikey-austin/greyd-golang/internal/config/parse"
-	"github.com/mikey-austin/greyd-golang/internal/core"
-	"github.com/mikey-austin/greyd-golang/internal/ipc"
-	"github.com/mikey-austin/greyd-golang/internal/logger"
-	"github.com/mikey-austin/greyd-golang/internal/settings"
-	"github.com/mikey-austin/greyd-golang/internal/stats"
-	"github.com/mikey-austin/greyd-golang/internal/version"
+	_ "github.com/mikey-austin/greyd-v2/adapters/db/all"
+	"github.com/mikey-austin/greyd-v2/adapters/db/memory"
+	_ "github.com/mikey-austin/greyd-v2/adapters/fw/all"
+	"github.com/mikey-austin/greyd-v2/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/config/parse"
+	"github.com/mikey-austin/greyd-v2/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/ipc"
+	"github.com/mikey-austin/greyd-v2/internal/logger"
+	"github.com/mikey-austin/greyd-v2/internal/settings"
+	"github.com/mikey-austin/greyd-v2/internal/stats"
+	"github.com/mikey-austin/greyd-v2/internal/version"
 )
 
 var testLog = logger.Discard()

@@ -6,7 +6,7 @@ Status: approved by the session goal directive (autonomous run; decisions record
 ## 1. Goal
 
 Port the C implementation of greyd (`/home/mikey/Workspace/greyd`, version 0.11.6) to Go, in
-`/home/mikey/Workspace/greyd-golang`, preserving every user-visible behaviour: the four programs
+`/home/mikey/Workspace/greyd-v2`, preserving every user-visible behaviour: the four programs
 (`greyd`, `greydb`, `greyd-setup`, `greylogd`), their command line switches, the `greyd.conf`
 language, the SMTP tarpit dialogue, greylisting rules, greytrapping, SPF, blacklist configuration
 connections, the spamd-compatible synchronisation protocol, pluggable firewalls and pluggable
@@ -313,7 +313,7 @@ Library packages return errors; only `internal/app` and `cmd` decide to exit.
 
 ```
 Makefile            all, build, generate, test, test-race, test-db-docker, lint, fmt, man, install, uninstall, dist, docker, clean
-go.mod              module github.com/mikey-austin/greyd-golang
+go.mod              module github.com/mikey-austin/greyd-v2
 cmd/                greyd greydb greyd-setup greylogd
 internal/ adapters/ as above
 doc/                greyd.8.md greyd.conf.5.md greydb.8.md greyd-setup.8.md greylogd.8.md (+ generated .8/.5/.html)

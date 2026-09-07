@@ -21,7 +21,7 @@ package smtp
 import (
 	"strings"
 
-	"github.com/mikey-austin/greyd-golang/internal/blacklist"
+	"github.com/mikey-austin/greyd-v2/internal/blacklist"
 )
 
 // GreyReply is the temporary failure given to greylisted connections.

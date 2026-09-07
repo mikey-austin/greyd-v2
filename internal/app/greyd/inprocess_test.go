@@ -6,7 +6,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/mikey-austin/greyd-golang/internal/settings"
+	"github.com/mikey-austin/greyd-v2/internal/settings"
 )
 
 // startChildrenInProcess runs the firewall and greylister roles as

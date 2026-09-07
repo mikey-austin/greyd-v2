@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Module path `github.com/mikey-austin/greyd-golang`; Go 1.25; no cgo anywhere (`CGO_ENABLED=0` must build all four binaries on linux).
+- Module path `github.com/mikey-austin/greyd-v2`; Go 1.25; no cgo anywhere (`CGO_ENABLED=0` must build all four binaries on linux).
 - C reference tree: `/home/mikey/Workspace/greyd` (read-only). When behaviour is unclear, the C source wins.
 - Every package has `_test.go` files; `make test` runs `go vet ./... && go test -race ./...` and must pass.
 - Library packages return errors; only `internal/app` and `cmd` may call `logger.Fatal`/`os.Exit`.
@@ -94,7 +94,7 @@ doc/ etc/ packages/ utils/ website/ README.md INSTALL COPYING AUTHORS ChangeLog 
   func SetExit(f func(int))                    // test hook
   ```
 - Steps:
-- [x] `go mod init github.com/mikey-austin/greyd-golang`; `.gitignore` with `bin/ .tools/ *.test coverage.out dist/ etc/greyd.conf etc/greyd.docker.conf etc/*-init`.
+- [x] `go mod init github.com/mikey-austin/greyd-v2`; `.gitignore` with `bin/ .tools/ *.test coverage.out dist/ etc/greyd.conf etc/greyd.docker.conf etc/*-init`.
 - [x] Makefile targets: `all build generate test test-race lint fmt man install uninstall dist docker clean`. Variables: `VERSION=1.0.0`, `prefix=/usr/local`, `sbindir=$(prefix)/sbin`, `sysconfdir=$(prefix)/etc`, `localstatedir=$(prefix)/var`, `mandir=$(prefix)/share/man`, `DEFAULT_CONFIG=$(sysconfdir)/greyd/greyd.conf`, `GREYD_PIDFILE=$(localstatedir)/empty/greyd/greyd.pid`, `GREYLOGD_PIDFILE=$(localstatedir)/empty/greylogd/greylogd.pid`, `CURL=/usr/bin/curl`, `ANTLR_VERSION=4.13.1`, `ANTLR_JAR=.tools/antlr-$(ANTLR_VERSION)-complete.jar`. `LDFLAGS=-X ...version.Version=$(VERSION) -X ...DefaultConfig=$(DEFAULT_CONFIG) ...`. `build` compiles the four programs into `bin/` with `CGO_ENABLED=0`. `generate` downloads the jar with curl if missing and runs `java -jar $(ANTLR_JAR) -Dlanguage=Go -package grammar -o internal/config/grammar -Xexact-output-dir internal/config/grammar/GreydConf.g4`. `install` uses `install -m 0750` for binaries, substitutes `etc/*.in` with sed exactly like `etc/Makefile.am`, installs man pages from `doc/*.8` and `doc/*.5`.
 - [x] Logger test: with `Stderr` set to a `bytes.Buffer`, `Syslog:false`, `Debug:false`: `Debug("x")` writes nothing, `Info("hi %d", 1)` writes `ident[<pid>]: hi 1\n`; with `Debug:true` debug lines appear; `Fatal` calls the exit hook with 1. File output uses an exclusive `flock` per write like `log.c`.
 - [x] Run `make build test`, commit `Scaffold Go module, Makefile, logger and version package`.

@@ -28,8 +28,8 @@ import (
 
 	"github.com/antlr4-go/antlr/v4"
 
-	"github.com/mikey-austin/greyd-golang/internal/config"
-	"github.com/mikey-austin/greyd-golang/internal/config/grammar"
+	"github.com/mikey-austin/greyd-v2/internal/config"
+	"github.com/mikey-austin/greyd-v2/internal/config/grammar"
 )
 
 // Error describes a syntax error with its position (1-based line, 0-based
