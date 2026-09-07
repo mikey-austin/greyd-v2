@@ -191,7 +191,7 @@ func TestRunEndToEnd(t *testing.T) {
 	sock := filepath.Join(dir, "g.sock")
 	fakeGreyd(t, sock, map[string]int64{"uptime_seconds": 5}, nil)
 	conf := filepath.Join(dir, "greyd.conf")
-	if err := os.WriteFile(conf, []byte(fmt.Sprintf("config_socket = %q\nsandbox = 0\nsyslog_enable = 0\nlog_to_file = %q\nsection monitor {\n  bind_address = \"127.0.0.1\"\n  port = 0\n  interval = 1\n}\n", sock, filepath.Join(dir, "m.log"))), 0o600); err != nil {
+	if err := os.WriteFile(conf, []byte(fmt.Sprintf("config_socket = %q\nsandbox = 0\ndrop_privs = 0\nsyslog_enable = 0\nlog_to_file = %q\nsection monitor {\n  bind_address = \"127.0.0.1\"\n  port = 0\n  interval = 1\n}\n", sock, filepath.Join(dir, "m.log"))), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out, errb strings.Builder

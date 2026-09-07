@@ -65,27 +65,24 @@ func newFakeGreyd(t *testing.T) *fakeGreyd {
 	g.wg.Add(1)
 	go func() {
 		defer g.wg.Done()
+		// Connections are read one at a time, as greyd serves its
+		// configuration socket, so frames keep the order Run sent them
+		// in (Run finishes one connection before opening the next).
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			g.wg.Add(1)
-			go func() {
-				defer g.wg.Done()
-				defer conn.Close()
-				msg, err := ipc.NewReader(conn).Next()
-				if err != nil {
-					return
-				}
-				bl, ok := msg.(*ipc.BlacklistMessage)
-				if !ok {
-					return
-				}
+			msg, err := ipc.NewReader(conn).Next()
+			_ = conn.Close()
+			if err != nil {
+				continue
+			}
+			if bl, ok := msg.(*ipc.BlacklistMessage); ok {
 				g.mu.Lock()
 				g.frames = append(g.frames, frame{name: bl.Name, message: bl.Message, ips: bl.IPs})
 				g.mu.Unlock()
-			}()
+			}
 		}
 	}()
 	t.Cleanup(func() {
