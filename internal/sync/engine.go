@@ -99,11 +99,12 @@ func (e *Engine) Keyed() bool { return e.keyed }
 // AddHost adds a unicast target; the name must resolve to an IPv4
 // address.
 func (e *Engine) AddHost(name string) error {
-	ips, err := net.LookupIP(name)
+	addrs, err := net.DefaultResolver.LookupIPAddr(context.Background(), name)
 	if err != nil {
 		return err
 	}
-	for _, ip := range ips {
+	for _, a := range addrs {
+		ip := a.IP
 		if v4 := ip.To4(); v4 != nil {
 			h := host{name: name, addr: &net.UDPAddr{IP: v4, Port: e.port}}
 			e.hosts = append(e.hosts, h)

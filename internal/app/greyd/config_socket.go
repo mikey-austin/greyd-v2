@@ -56,7 +56,7 @@ func (d *daemon) serveConfig(ctx context.Context) error {
 
 // handleConfigConn reads one blacklist from an authorised peer.
 func (d *daemon) handleConfigConn(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if !d.authoriseConfigPeer(conn) {
 		return
 	}

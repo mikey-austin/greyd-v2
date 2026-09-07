@@ -23,7 +23,7 @@ package sync
 import (
 	"bytes"
 	"crypto/hmac"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // spamd sync protocol
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -79,8 +79,8 @@ func LoadKey(path string) (k Key, ok bool, err error) {
 		}
 		return k, false, err
 	}
-	defer f.Close()
-	h := sha1.New()
+	defer func() { _ = f.Close() }()
+	h := sha1.New() //nolint:gosec // the spamd sync protocol authenticates with HMAC-SHA1
 	if _, err := io.Copy(h, f); err != nil {
 		return k, false, err
 	}

@@ -22,6 +22,7 @@
 package procs
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -63,7 +64,7 @@ func (s Spawn) Start() (*exec.Cmd, error) {
 	if args == nil {
 		args = os.Args[1:]
 	}
-	cmd := exec.Command(exe, args...)
+	cmd := exec.CommandContext(context.Background(), exe, args...)
 
 	names := make([]string, 0, len(s.Files))
 	for n := range s.Files {

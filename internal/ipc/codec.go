@@ -340,11 +340,11 @@ func (sc *scanner) value() (value, error) {
 	if sc.eof() {
 		return value{}, sc.errorf("expected a value")
 	}
-	switch c := sc.src[sc.pos]; {
-	case c == '"':
+	switch c := sc.src[sc.pos]; c {
+	case '"':
 		s, err := sc.quoted()
 		return value{s: s}, err
-	case c == '[':
+	case '[':
 		sc.pos++
 		v := value{isLst: true, list: []string{}}
 		for {

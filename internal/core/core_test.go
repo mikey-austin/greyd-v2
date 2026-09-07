@@ -80,12 +80,12 @@ func (f *fakeFW) LookupOrigDst(_ context.Context, _, p netip.AddrPort) (netip.Ad
 }
 
 func TestRegistry(t *testing.T) {
-	RegisterStore("teststore", func(cfg *config.Config, o StoreOptions) (Store, error) {
+	RegisterStore("teststore", "test store", func(cfg *config.Config, o StoreOptions) (Store, error) {
 		return &fakeStore{data: map[string]Data{"1.2.3.4": {PCount: PCountTrapped}, "5.6.7.8": {PCount: 3}}}, nil
 	})
 	fw := &fakeFW{}
-	RegisterFirewall("testfw", func(cfg *config.Config, _ FirewallOptions) (Firewall, error) { return fw, nil })
-	RegisterFirewall("badfw", func(cfg *config.Config, _ FirewallOptions) (Firewall, error) { return &fakeFW{fail: true}, nil })
+	RegisterFirewall("testfw", "test firewall", func(cfg *config.Config, _ FirewallOptions) (Firewall, error) { return fw, nil })
+	RegisterFirewall("badfw", "failing firewall", func(cfg *config.Config, _ FirewallOptions) (Firewall, error) { return &fakeFW{fail: true}, nil })
 
 	if !contains(StoreDrivers(), "teststore") || !contains(FirewallDrivers(), "testfw") {
 		t.Fatal("drivers not listed")

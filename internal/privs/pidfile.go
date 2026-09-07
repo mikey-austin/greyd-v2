@@ -41,7 +41,7 @@ type Pidfile struct {
 // fcntl write lock, writes the pid and chowns the file to owner (when
 // non-nil). It ports write_pidfile.
 func WritePidfile(path string, owner *user.User) (*Pidfile, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644) //nolint:gosec // pidfiles are read by other users
 	if err != nil {
 		return nil, err
 	}

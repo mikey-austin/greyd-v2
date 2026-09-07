@@ -25,6 +25,7 @@ package smtp
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -396,6 +397,10 @@ func (c *Conn) HandleRead() {
 		return
 	}
 	limit := c.cfg.lineLimit()
+	if c.State == StateProxyOut {
+		// Only a proxy protocol header is acceptable as the first line.
+		limit = min(limit, MaxProxyHeader)
+	}
 	buf := make([]byte, limit)
 	for {
 		remaining := limit - len(c.in)
@@ -410,7 +415,7 @@ func (c *Conn) HandleRead() {
 			c.in = append(c.in, buf[:n]...)
 		}
 		if err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) {
 				c.log.Warn("connection read error", "err", err)
 			}
 			c.Close()

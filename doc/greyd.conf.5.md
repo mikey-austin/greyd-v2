@@ -80,6 +80,9 @@ The following options may be specified outside of a section. A *boolean* value i
 * **chroot_dir** = *string*:
   The location to chroot to.
 
+* **sandbox** = *boolean*:
+  Confine each process once it has dropped privileges and opened what it needs. On Linux this sets *no_new_privs*, restricts filesystem access with Landlock (the main and firewall processes keep none, the greylister keeps its database directory and */etc* for the resolver) and installs a seccomp filter that refuses to start programs, trace, mount, load modules or change namespaces. On OpenBSD the processes are pledged. Unsupported kernels are skipped with a debug message. Enabled by default; set to *0* when running a database or firewall driver with unusual filesystem needs.
+
 * **setrlimit** = *boolean*:
   Use setrlimit to self-impose resource limits such as the maximum number of file descriptors (ie connections).
 

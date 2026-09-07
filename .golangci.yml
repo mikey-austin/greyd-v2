@@ -1,0 +1,69 @@
+# golangci-lint configuration (v2 format). Run with "make lint".
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - staticcheck
+    - govet
+    - gosec
+    - bodyclose
+    - ineffassign
+    - unused
+    - misspell
+    - unconvert
+    - unparam
+    - noctx
+    - errorlint
+
+  settings:
+    errcheck:
+      # Diagnostics written to a terminal or log; nothing sensible can be
+      # done when they fail.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (*os.File).WriteString
+    govet:
+      # The ANTLR generated parser contains unreachable statements by
+      # design (mirrors "go vet -unreachable=false" in the Makefile).
+      disable:
+        - unreachable
+    gosec:
+      excludes:
+        # G204 (subprocess launched with variable): greyd-setup runs curl (and
+        # "exec" list fetchers) from paths given in greyd.conf by design.
+        - G204
+        # G304 (file inclusion via variable): configuration files, includes,
+        # blacklist files and pidfiles are all operator supplied paths.
+        - G304
+        # G115 (integer overflow conversions): the wire codecs, netlink
+        # attribute builders and BPF program builders narrow values whose
+        # ranges are checked or bounded by construction; the rule flags every
+        # conversion regardless.
+        - G115
+        # G103 (unsafe): the sandbox passes structs to the landlock and
+        # seccomp system calls, which have no wrappers in x/sys.
+        - G103
+
+  exclusions:
+    # Skip files carrying a "Code generated ... DO NOT EDIT" header.
+    generated: lax
+    paths:
+      # The ANTLR generated lexer/parser.
+      - internal/config/grammar
+      - (^|/)grammar/
+    rules:
+      # Tests: ignored Close errors, world-readable fixtures, context-free
+      # dials and fixed helper arguments are fine.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - noctx
+          - unparam

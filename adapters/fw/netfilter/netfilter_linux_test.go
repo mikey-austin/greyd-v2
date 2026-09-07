@@ -22,6 +22,7 @@ package netfilter
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"os"
 	"slices"
@@ -126,7 +127,7 @@ func TestCaptureLogDrainsQueue(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := fw.CaptureLog(ctx); err != context.DeadlineExceeded {
+	if _, err := fw.CaptureLog(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context deadline error, got %v", err)
 	}
 }
@@ -139,16 +140,16 @@ func TestReplaceCancelledContext(t *testing.T) {
 	cancel()
 	// A done context is refused before any netlink request is issued, so
 	// this needs no privileges.
-	if n, err := fw.Replace(ctx, "greyd-test", []string{"192.0.2.0/24"}, core.IPv4); err != context.Canceled || n != -1 {
+	if n, err := fw.Replace(ctx, "greyd-test", []string{"192.0.2.0/24"}, core.IPv4); !errors.Is(err, context.Canceled) || n != -1 {
 		t.Fatalf("Replace with cancelled ctx = %d, %v; want -1, context.Canceled", n, err)
 	}
-	if err := fw.StartLogCapture(ctx); err != context.Canceled {
+	if err := fw.StartLogCapture(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("StartLogCapture with cancelled ctx = %v; want context.Canceled", err)
 	}
 	src := netip.MustParseAddrPort("192.0.2.1:40000")
 	proxy := netip.MustParseAddrPort("198.51.100.1:8025")
 	got, err := fw.LookupOrigDst(ctx, src, proxy)
-	if err != context.Canceled || got != proxy {
+	if !errors.Is(err, context.Canceled) || got != proxy {
 		t.Fatalf("LookupOrigDst with cancelled ctx = %v, %v; want proxy, context.Canceled", got, err)
 	}
 }

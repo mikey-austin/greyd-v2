@@ -222,7 +222,7 @@ func (s *Store) Opened() bool { return s.db != nil }
 // failure db is closed.
 func (s *Store) Attach(ctx context.Context, db *sql.DB, mode core.OpenMode, schema []string) error {
 	if s.db != nil {
-		db.Close()
+		_ = db.Close()
 		return errors.New("store already attached")
 	}
 	var (
@@ -232,20 +232,20 @@ func (s *Store) Attach(ctx context.Context, db *sql.DB, mode core.OpenMode, sche
 	if s.dialect.PinnedConn {
 		c, err := db.Conn(ctx)
 		if err != nil {
-			db.Close()
+			_ = db.Close()
 			return fmt.Errorf("connect: %w", err)
 		}
 		conn, run = c, c
 	} else if err := db.PingContext(ctx); err != nil {
-		db.Close()
+		_ = db.Close()
 		return fmt.Errorf("connect: %w", err)
 	}
 	for _, stmt := range schema {
 		if _, err := run.ExecContext(ctx, stmt); err != nil {
 			if conn != nil {
-				conn.Close()
+				_ = conn.Close()
 			}
-			db.Close()
+			_ = db.Close()
 			return fmt.Errorf("db schema init failed: %w", err)
 		}
 	}
@@ -484,7 +484,7 @@ func (t *tx) Get(k core.Key) (core.Data, bool, error) {
 	if err != nil {
 		return core.Data{}, false, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
 		return core.Data{}, false, rows.Err()
 	}
@@ -544,7 +544,7 @@ func (t *tx) Iter(types core.IterTypes) (core.Iterator, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	it := &iterator{t: t, pos: -1}
 	for rows.Next() {
@@ -666,7 +666,7 @@ func (t *tx) Scan(now, whiteExp int64) (core.ScanResult, error) {
 	if err != nil {
 		return res, fmt.Errorf("fetch white/trap entries: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var white, white6, trap sql.NullString
 		if err := rows.Scan(&white, &white6, &trap); err != nil {

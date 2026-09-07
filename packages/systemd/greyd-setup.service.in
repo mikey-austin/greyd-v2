@@ -1,0 +1,39 @@
+# greyd-setup.service - generated from packages/systemd/greyd-setup.service.in
+# by make. Started by greyd-setup.timer; run "systemctl start greyd-setup"
+# to refresh the blacklists immediately.
+#
+# greyd-setup runs as root on purpose: it talks to greyd's config port from
+# a reserved (< 1024) source port and, in blacklist-only mode (-b), programs
+# the firewall directly (CAP_NET_ADMIN). It does not stay resident. Lists
+# are fetched with curl (curl_path in greyd.conf) or an "exec" method, so
+# the unit must allow child processes and outbound network access.
+
+[Unit]
+Description=Fetch blacklists and load them into greyd
+Documentation=man:greyd-setup(8) man:greyd.conf(5)
+After=network-online.target greyd.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=@sbindir@/greyd-setup -f @DEFAULT_CONFIG@
+User=root
+AmbientCapabilities=
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_NET_RAW CAP_SETUID CAP_SETGID CAP_CHOWN CAP_DAC_OVERRIDE
+NoNewPrivileges=yes
+
+ProtectSystem=strict
+ReadWritePaths=-@localstatedir@/@PACKAGE@ -@localstatedir@/log -/var/log
+ProtectHome=yes
+PrivateTmp=yes
+
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK

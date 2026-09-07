@@ -101,6 +101,7 @@ daemonize = 0
 drop_privs = 0
 chroot = 0
 setrlimit = 0
+sandbox = 0
 syslog_enable = 0
 bind_address = "127.0.0.1"
 port = 0

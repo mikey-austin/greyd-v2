@@ -17,6 +17,7 @@
 package privs
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -44,9 +45,9 @@ func Daemonize(nochdir bool) error {
 	if err != nil {
 		return fmt.Errorf("daemon: %w", err)
 	}
-	defer devnull.Close()
+	defer func() { _ = devnull.Close() }()
 
-	cmd := exec.Command(exe, os.Args[1:]...)
+	cmd := exec.CommandContext(context.Background(), exe, os.Args[1:]...)
 	cmd.Env = append(os.Environ(), EnvDaemonized+"=1")
 	cmd.Stdin = devnull
 	cmd.Stdout = devnull

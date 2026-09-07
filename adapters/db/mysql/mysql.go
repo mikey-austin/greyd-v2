@@ -56,7 +56,7 @@ const (
 var schemaSQL string
 
 func init() {
-	core.RegisterStore(DriverName, func(cfg *config.Config, opts core.StoreOptions) (core.Store, error) {
+	core.RegisterStore(DriverName, "MySQL / MariaDB server", func(cfg *config.Config, opts core.StoreOptions) (core.Store, error) {
 		return New(cfg, opts), nil
 	})
 }

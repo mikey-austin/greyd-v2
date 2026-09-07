@@ -43,6 +43,9 @@ type Global struct {
 	Chroot    bool   `conf:"chroot" def:"1"`
 	ChrootDir string `conf:"chroot_dir" def:"/var/empty"`
 	SetRlimit bool   `conf:"setrlimit" def:"1"`
+	// Sandbox confines each process after it has dropped privileges
+	// (Landlock and seccomp on Linux, pledge on OpenBSD).
+	Sandbox bool `conf:"sandbox" def:"1"`
 
 	MaxCons      int `conf:"max_cons" def:"800"`
 	MaxConsBlack int `conf:"max_cons_black" def:"800"`

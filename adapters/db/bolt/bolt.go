@@ -63,7 +63,7 @@ const (
 var errStop = errors.New("stop")
 
 func init() {
-	core.RegisterStore(DriverName, func(cfg *config.Config, opts core.StoreOptions) (core.Store, error) {
+	core.RegisterStore(DriverName, "embedded key/value store (replaces the Berkeley DB drivers)", func(cfg *config.Config, opts core.StoreOptions) (core.Store, error) {
 		return New(cfg, opts)
 	})
 }
@@ -107,6 +107,9 @@ type Store struct {
 // Path returns the database file path.
 func (s *Store) Path() string { return s.path }
 
+// WritablePaths implements core.FilesystemUser.
+func (s *Store) WritablePaths() []string { return []string{filepath.Dir(s.path)} }
+
 // Open opens the database file, creating it and the buckets in read-write
 // mode. Opening an already open store is a no-op.
 func (s *Store) Open(ctx context.Context, mode core.OpenMode) error {
@@ -134,7 +137,7 @@ func (s *Store) Open(ctx context.Context, mode core.OpenMode) error {
 			return nil
 		})
 		if err != nil {
-			db.Close()
+			_ = db.Close()
 			return err
 		}
 	}

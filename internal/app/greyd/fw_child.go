@@ -32,6 +32,7 @@ import (
 	"github.com/mikey-austin/greyd-golang/internal/ipc"
 	"github.com/mikey-austin/greyd-golang/internal/privs"
 	"github.com/mikey-austin/greyd-golang/internal/procs"
+	"github.com/mikey-austin/greyd-golang/internal/sandbox"
 	"github.com/mikey-austin/greyd-golang/internal/settings"
 )
 
@@ -83,20 +84,26 @@ func runFwChild(ctx context.Context, s *settings.Settings, files fwFiles, log *s
 	if err != nil {
 		return err
 	}
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	if err := dropMainPrivs(s, driverIsPF(s)); err != nil {
 		return err
 	}
+	if s.Sandbox {
+		// pf needs pfctl and ioctl on /dev/pf; netfilter only netlink.
+		pf := driverIsPF(s)
+		applySandbox(sandbox.Profile{Role: sandbox.RoleFirewall, Exec: pf, Devices: pf}, log)
+	}
 
 	h := &fwHandler{fw: fw, out: files.natOut, log: log}
-	handle := func(r io.Reader) error {
+	// handle serves one pipe until it closes or ctx ends.
+	handle := func(r io.Reader) {
 		rd := ipc.NewReader(r)
 		for {
 			m, err := rd.Next()
 			if err != nil {
 				if errors.Is(err, io.EOF) || ctx.Err() != nil {
-					return nil
+					return
 				}
 				log.Warn("firewall process: bad message", "err", err)
 				continue
@@ -105,16 +112,13 @@ func runFwChild(ctx context.Context, s *settings.Settings, files fwFiles, log *s
 		}
 	}
 
-	errc := make(chan error, 2)
-	go func() { errc <- handle(files.fwIn) }()
-	go func() { errc <- handle(files.greyFwIn) }()
+	done := make(chan struct{}, 2)
+	go func() { handle(files.fwIn); done <- struct{}{} }()
+	go func() { handle(files.greyFwIn); done <- struct{}{} }()
 
 	select {
 	case <-ctx.Done():
-	case err := <-errc:
-		if err != nil {
-			return err
-		}
+	case <-done:
 		// One pipe closed: the parent is going away.
 	}
 	log.Info("stopping firewall process")

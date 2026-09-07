@@ -254,7 +254,7 @@ func TestRunBlacklistModeNeedsFirewall(t *testing.T) {
 	g := newFakeGreyd(t)
 
 	err := Run(context.Background(), load(t, cfg), Options{GreyOnly: false}, nil, g.dial)
-	if err == nil || !strings.Contains(err.Error(), "Could not configure firewall") {
+	if err == nil || !strings.Contains(err.Error(), "could not configure firewall") {
 		t.Fatalf("err = %v, want firewall error", err)
 	}
 }
@@ -327,9 +327,9 @@ blacklist nofile {
 	}
 	for _, msg := range []string{
 		"ignoring list list=missing",
-		"Unknown method carrier-pigeon",
+		"unknown method carrier-pigeon",
 		"ignoring list list=odd",
-		"No file configuration variables set",
+		"no file configuration variables set",
 		"ignoring list list=nofile",
 	} {
 		if !strings.Contains(logs.String(), msg) {
@@ -421,7 +421,7 @@ blacklist remote {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rc, err := Open(cfg.Blacklist("remote"), load(t, cfg).Setup)
+			rc, err := Open(context.Background(), cfg.Blacklist("remote"), load(t, cfg).Setup)
 			if err != nil {
 				t.Fatalf("Open: %v", err)
 			}
@@ -449,7 +449,7 @@ blacklist remote { method = "ftp", file = "ftp.example.org/list" }
 	if err != nil {
 		t.Fatal(err)
 	}
-	rc, err := Open(cfg.Blacklist("remote"), load(t, cfg).Setup)
+	rc, err := Open(context.Background(), cfg.Blacklist("remote"), load(t, cfg).Setup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,7 +472,7 @@ blacklist plain { method = "file", file = "%s" }
 		t.Fatal(err)
 	}
 	for name, want := range map[string]string{"gz": "1.2.3.4\n", "plain": "5.6.7.8\n"} {
-		rc, err := Open(cfg.Blacklist(name), load(t, cfg).Setup)
+		rc, err := Open(context.Background(), cfg.Blacklist(name), load(t, cfg).Setup)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -493,7 +493,7 @@ func TestOpenExecSplitsOnSpacesAndTabs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rc, err := Open(cfg.Blacklist("ex"), load(t, cfg).Setup)
+	rc, err := Open(context.Background(), cfg.Blacklist("ex"), load(t, cfg).Setup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +504,7 @@ func TestOpenExecSplitsOnSpacesAndTabs(t *testing.T) {
 	if string(data) != "5.6.7.8\n" {
 		t.Fatalf("read %q", data)
 	}
-	if _, err := Open(cfg.Blacklist("missing"), load(t, cfg).Setup); err == nil {
+	if _, err := Open(context.Background(), cfg.Blacklist("missing"), load(t, cfg).Setup); err == nil {
 		t.Fatal("expected error for missing command")
 	}
 }

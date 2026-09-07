@@ -67,10 +67,9 @@ func parseInto(t *testing.T, src string, typ blacklist.Type) (*blacklist.Blackli
 }
 
 func TestParse(t *testing.T) {
-	src := "\n# comment\n192.168.20.0/24\n192.168.21.0 - 192.168.21.255 text ignored? no, only comments\n"
-	// The trailing text after the range is not valid in the grammar; the C
-	// parser errors there too, so use a clean source for the success case.
-	src = "\n# comment\n192.168.20.0/24\n192.168.21.0 - 192.168.21.255\n\n192.168.23.1 # single\n"
+	// Trailing text after a range is not valid in the grammar (the C parser
+	// errors there too), so the success case uses a clean source.
+	src := "\n# comment\n192.168.20.0/24\n192.168.21.0 - 192.168.21.255\n\n192.168.23.1 # single\n"
 	bl, err := parseInto(t, src, blacklist.TypeBlack)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)

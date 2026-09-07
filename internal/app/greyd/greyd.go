@@ -90,7 +90,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	switch procs.Role() {
 	case RoleFirewall:
 		log, h := newLogger(s, stderr)
-		defer h.Close()
+		defer func() { _ = h.Close() }()
 		files, err := inheritedFwFiles()
 		if err != nil {
 			log.Error(err.Error())
@@ -104,7 +104,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	case RoleGrey:
 		log, h := newLogger(s, stderr)
-		defer h.Close()
+		defer func() { _ = h.Close() }()
 		files, err := inheritedGreyFiles()
 		if err != nil {
 			log.Error(err.Error())
@@ -126,7 +126,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	log, h := newLogger(s, stderr)
-	defer h.Close()
+	defer func() { _ = h.Close() }()
 	log.Info("greyd starting", "version", version.Version)
 	for _, w := range s.Warnings {
 		log.Warn(w)
@@ -207,12 +207,12 @@ func checkConfig(s *settings.Settings, path string, out io.Writer) int {
 // printDrivers implements --drivers.
 func printDrivers(out io.Writer) {
 	fmt.Fprintln(out, "database drivers:")
-	for _, d := range core.StoreDrivers() {
-		fmt.Fprintf(out, "  %s\n", d)
+	for _, d := range core.StoreDriverInfos() {
+		fmt.Fprintf(out, "  %-12s %s\n", d.Name, d.Description)
 	}
 	fmt.Fprintln(out, "firewall drivers:")
-	for _, d := range core.FirewallDrivers() {
-		fmt.Fprintf(out, "  %s\n", d)
+	for _, d := range core.FirewallDriverInfos() {
+		fmt.Fprintf(out, "  %-12s %s\n", d.Name, d.Description)
 	}
 }
 

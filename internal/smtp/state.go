@@ -19,6 +19,7 @@
 package smtp
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -101,7 +102,7 @@ func (c *Conn) NextState() {
 					c.rematchAfterProxy()
 					st = StateBannerIn
 					continue
-				case err == ErrProxyUnknown:
+				case errors.Is(err, ErrProxyUnknown):
 					c.log.Debug("UNKNOWN proxy protocol header encountered; refusing to continue")
 				default:
 					c.log.Warn("invalid proxy protocol header", "err", err)

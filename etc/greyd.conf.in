@@ -101,6 +101,13 @@ greylogd_pidfile = "@GREYLOGD_PIDFILE@"
 setrlimit = 1
 
 #
+# Confine each process (Landlock/seccomp on Linux, pledge on OpenBSD)
+# after it has dropped privileges. Disable if a driver needs unusual
+# filesystem access.
+#
+# sandbox = 1
+
+#
 # Specify the maximum number of connections.
 #
 # max_cons = 800

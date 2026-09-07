@@ -158,7 +158,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %v\n", progName, err)
 		return 1
 	}
-	defer h.Close()
+	defer func() { _ = h.Close() }()
 	for _, w := range s.Warnings {
 		log.Warn(w)
 	}
@@ -248,7 +248,7 @@ func dbList(ctx context.Context, store core.Store, stdout, stderr io.Writer) int
 		if err != nil {
 			return err
 		}
-		defer it.Close()
+		defer func() { _ = it.Close() }()
 
 		for {
 			k, d, ok, err := it.Next()

@@ -28,10 +28,17 @@ var ErrProxyUnknown = errors.New("UNKNOWN proxy protocol header")
 // ErrProxyInvalid is returned for a malformed header.
 var ErrProxyInvalid = errors.New("invalid proxy protocol header")
 
+// MaxProxyHeader is the longest proxy protocol v1 header including the
+// CRLF (from the specification).
+const MaxProxyHeader = 107
+
 // ParseProxyHeader parses a proxy protocol v1 line
 // ("PROXY TCP4 src dst sport dport") and returns the canonical source and
 // destination addresses. Ports are not validated, as in the C code.
 func ParseProxyHeader(line string) (src, dst netip.Addr, err error) {
+	if len(line) > MaxProxyHeader {
+		return src, dst, ErrProxyInvalid
+	}
 	fields := strings.Fields(line)
 	if len(fields) < 2 || !strings.EqualFold(fields[0], "PROXY") {
 		return src, dst, ErrProxyInvalid

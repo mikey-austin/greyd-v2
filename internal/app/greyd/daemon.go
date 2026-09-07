@@ -108,7 +108,7 @@ func newDaemon(s *settings.Settings, o Options, maxFiles int, log *slog.Logger) 
 	if !d.greylist {
 		d.maxBlack = d.maxCons
 	} else if d.maxBlack > d.maxCons {
-		return nil, fmt.Errorf("Max black cons (%d) must not exceed total max cons (%d)\n%s", d.maxBlack, d.maxCons, Usage)
+		return nil, fmt.Errorf("max black cons (%d) must not exceed total max cons (%d)\n%s", d.maxBlack, d.maxCons, Usage)
 	}
 
 	if s.SetRlimit {

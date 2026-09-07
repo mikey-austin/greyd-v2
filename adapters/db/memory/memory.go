@@ -35,7 +35,7 @@ import (
 const DriverName = "memory"
 
 func init() {
-	core.RegisterStore(DriverName, func(cfg *config.Config, _ core.StoreOptions) (core.Store, error) {
+	core.RegisterStore(DriverName, "non-persistent in-process store (testing)", func(cfg *config.Config, _ core.StoreOptions) (core.Store, error) {
 		return Open(cfg.Str("name", "database", "default")), nil
 	})
 }

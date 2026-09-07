@@ -20,11 +20,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os/user"
+	"path/filepath"
 	"sync"
 
 	"github.com/mikey-austin/greyd-golang/internal/ipc"
 	"github.com/mikey-austin/greyd-golang/internal/privs"
+	"github.com/mikey-austin/greyd-golang/internal/sandbox"
 	"github.com/mikey-austin/greyd-golang/internal/smtp"
 	gsync "github.com/mikey-austin/greyd-golang/internal/sync"
 	"github.com/mikey-austin/greyd-golang/internal/version"
@@ -55,6 +58,7 @@ func (d *daemon) serve(ctx context.Context, start childStarter) error {
 	if err := d.confine(pw); err != nil {
 		return err
 	}
+	d.sandbox()
 
 	d.log.Warn("listening for incoming connections")
 	if d.main6Ln != nil {
@@ -108,7 +112,7 @@ func (d *daemon) writePidfile(pw *user.User) error {
 	pf, err := privs.WritePidfile(path, pw)
 	if err != nil {
 		if errors.Is(err, privs.ErrAlreadyRunning) {
-			return fmt.Errorf("it appears greyd is already running...")
+			return errors.New("it appears greyd is already running")
 		}
 		return fmt.Errorf("could not write pidfile %s: %w", path, err)
 	}
@@ -178,6 +182,37 @@ func (d *daemon) confine(pw *user.User) error {
 		}
 	}
 	return nil
+}
+
+// sandbox confines the main process: it only needs its sockets and
+// pipes, plus the pidfile and configuration socket to remove at exit when
+// not chrooted.
+func (d *daemon) sandbox() {
+	if !d.s.Sandbox {
+		return
+	}
+	p := sandbox.Profile{Role: sandbox.RoleMain}
+	if !d.s.Chroot {
+		p.WritePaths = append(p.WritePaths, filepath.Dir(d.pidfile.Path()))
+		if d.s.ConfigSocket != "" {
+			p.WritePaths = append(p.WritePaths, filepath.Dir(d.s.ConfigSocket))
+		}
+	}
+	applySandbox(p, d.log)
+}
+
+// applySandbox applies a profile, treating an unsupported platform as a
+// debug event and any other failure as a warning: greyd keeps serving mail
+// without the extra confinement.
+func applySandbox(p sandbox.Profile, log *slog.Logger) {
+	err := sandbox.Apply(p, log)
+	switch {
+	case err == nil:
+	case errors.Is(err, sandbox.ErrUnsupported):
+		log.Debug("sandbox unavailable on this platform", "role", p.Role.String())
+	default:
+		log.Warn("sandbox not applied", "role", p.Role.String(), "err", err)
+	}
 }
 
 func (d *daemon) newSMTPServer() *smtp.Server {

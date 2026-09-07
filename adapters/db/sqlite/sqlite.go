@@ -64,7 +64,7 @@ const (
 var sleep = time.Sleep
 
 func init() {
-	core.RegisterStore(DriverName, func(cfg *config.Config, opts core.StoreOptions) (core.Store, error) {
+	core.RegisterStore(DriverName, "embedded SQLite 3 database", func(cfg *config.Config, opts core.StoreOptions) (core.Store, error) {
 		return New(cfg, opts)
 	})
 }
@@ -150,13 +150,19 @@ func New(cfg *config.Config, opts core.StoreOptions) (*Store, error) {
 // Path returns the database file path.
 func (s *Store) Path() string { return s.path }
 
+// WritablePaths implements core.FilesystemUser: SQLite writes the journal
+// next to the database file.
+func (s *Store) WritablePaths() []string { return []string{filepath.Dir(s.path)} }
+
 // Open opens the database file and ensures the schema exists. It is a
 // no-op on an open store. A store opened read-only refuses Update.
 func (s *Store) Open(ctx context.Context, mode core.OpenMode) error {
 	if s.Opened() {
 		return nil
 	}
-	db, err := sql.Open("sqlite", s.path)
+	// Temporary tables and sort spills stay in memory, so the process
+	// needs no scratch directory once sandboxed.
+	db, err := sql.Open("sqlite", "file:"+s.path+"?_pragma=temp_store(memory)")
 	if err != nil {
 		return fmt.Errorf("could not open %s: %w", s.path, err)
 	}

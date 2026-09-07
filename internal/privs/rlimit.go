@@ -36,7 +36,7 @@ func MaxFiles() (int, error) {
 	var lim unix.Rlimit
 	max := DefaultMaxCons
 	if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &lim); err == nil && lim.Max != unix.RLIM_INFINITY {
-		if lim.Max > 1<<30 || lim.Max < 0 {
+		if lim.Max > 1<<30 {
 			max = 1 << 30
 		} else {
 			max = int(lim.Max)

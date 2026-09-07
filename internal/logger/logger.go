@@ -103,7 +103,7 @@ func New(o Options) (*slog.Logger, *Handler, error) {
 	if o.Syslog {
 		s, err := openSyslog(h.ident)
 		if err != nil {
-			fmt.Fprintf(h.stderr, "%s: syslog unavailable: %v\n", h.ident, err)
+			_, _ = fmt.Fprintf(h.stderr, "%s: syslog unavailable: %v\n", h.ident, err)
 		} else {
 			h.sysl = s
 		}
@@ -125,7 +125,7 @@ func (h *Handler) Reopen(file string) error {
 	if file == "" {
 		return nil
 	}
-	f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644) //nolint:gosec // log files are conventionally world readable
 	if err != nil {
 		return fmt.Errorf("open log file %s: %w", file, err)
 	}

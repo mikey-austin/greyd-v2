@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/mikey-austin/greyd-golang/adapters/db/dbtest"
@@ -41,7 +42,7 @@ func TestNamedDatabasesShare(t *testing.T) {
 	// Read-only stores refuse writes.
 	ro := Open("shared")
 	_ = ro.Open(ctx, core.OpenRO)
-	if err := core.Put(ctx, ro, core.IPKey("2.2.2.2"), core.Data{}); err != core.ErrReadOnly {
+	if err := core.Put(ctx, ro, core.IPKey("2.2.2.2"), core.Data{}); !errors.Is(err, core.ErrReadOnly) {
 		t.Fatalf("read-only Put: %v", err)
 	}
 }

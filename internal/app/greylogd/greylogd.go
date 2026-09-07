@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -36,6 +37,7 @@ import (
 	"github.com/mikey-austin/greyd-golang/internal/core"
 	"github.com/mikey-austin/greyd-golang/internal/logger"
 	"github.com/mikey-austin/greyd-golang/internal/privs"
+	"github.com/mikey-austin/greyd-golang/internal/sandbox"
 	"github.com/mikey-austin/greyd-golang/internal/settings"
 	greydsync "github.com/mikey-austin/greyd-golang/internal/sync"
 	"github.com/mikey-austin/greyd-golang/internal/version"
@@ -133,9 +135,9 @@ func Run(args []string, stderr io.Writer) int {
 
 	log, h, err := logger.New(logger.Options{
 		Ident:  progName,
-		Debug:  s.Global.Debug,
-		Syslog: s.Global.SyslogEnable,
-		File:   s.Global.LogToFile,
+		Debug:  s.Debug,
+		Syslog: s.SyslogEnable,
+		File:   s.LogToFile,
 		Stderr: stderr,
 	})
 	if err != nil {
@@ -188,7 +190,7 @@ func Run(args []string, stderr io.Writer) int {
 		return 1
 	}
 
-	if s.Global.Daemonize {
+	if s.Daemonize {
 		if err := privs.Daemonize(true); err != nil {
 			log.Warn("daemon", "err", err)
 			eng.Stop()
@@ -196,7 +198,7 @@ func Run(args []string, stderr io.Writer) int {
 		}
 	}
 
-	pidfilePath := s.Global.GreylogdPidfile
+	pidfilePath := s.GreylogdPidfile
 	if pidfilePath == "" {
 		pidfilePath = version.GreylogdPidfile
 	}
@@ -229,8 +231,8 @@ func Run(args []string, stderr io.Writer) int {
 		return 1
 	}
 
-	dropPrivs := s.Global.DropPrivs
-	storeOpts := core.StoreOptions{Hostname: s.Global.Hostname, Log: log}
+	dropPrivs := s.DropPrivs
+	storeOpts := core.StoreOptions{Hostname: s.Hostname, Log: log}
 	if storeOpts.Hostname == "" {
 		storeOpts.Hostname = hostname()
 	}
@@ -267,6 +269,18 @@ func Run(args []string, stderr io.Writer) int {
 		if err := store.Open(ctx, core.OpenRW); err != nil {
 			log.Warn("could not open database", "err", err)
 			goto shutdown
+		}
+		if s.Sandbox {
+			pf := core.NormalizeDriver(s.Firewall.Driver) == "pf"
+			p := sandbox.Profile{Role: sandbox.RoleGrey, Exec: pf, Devices: pf, ReadPaths: []string{"/etc"}}
+			p.WritePaths = append(p.WritePaths, core.WritablePaths(store)...)
+			p.WritePaths = append(p.WritePaths, filepath.Dir(pidfilePath))
+			if s.LogToFile != "" {
+				p.WritePaths = append(p.WritePaths, filepath.Dir(s.LogToFile))
+			}
+			if err := sandbox.Apply(p, log); err != nil && !errors.Is(err, sandbox.ErrUnsupported) {
+				log.Warn("sandbox not applied", "err", err)
+			}
 		}
 
 		for ctx.Err() == nil {

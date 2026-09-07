@@ -147,7 +147,7 @@ func tally(t *testing.T, s core.Store, types core.IterTypes) (counts, map[string
 		if err != nil {
 			return err
 		}
-		defer it.Close()
+		defer func() { _ = it.Close() }()
 		for {
 			k, d, ok, err := it.Next()
 			if err != nil {
@@ -402,7 +402,7 @@ func testIteratorMutation(t *testing.T, s core.Store) {
 		if err != nil {
 			return err
 		}
-		defer it.Close()
+		defer func() { _ = it.Close() }()
 		if err := it.ReplaceCurrent(core.Data{}); err == nil {
 			t.Fatal("ReplaceCurrent before Next must fail")
 		}

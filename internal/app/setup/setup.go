@@ -114,16 +114,16 @@ func Run(args []string, stderr io.Writer) int {
 
 	log, h, err := logger.New(logger.Options{
 		Ident:  progName,
-		Debug:  o.debug || s.Global.Debug,
-		Syslog: s.Global.SyslogEnable,
-		File:   s.Global.LogToFile,
+		Debug:  o.debug || s.Debug,
+		Syslog: s.SyslogEnable,
+		File:   s.LogToFile,
 		Stderr: stderr,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", progName, err)
 		return 1
 	}
-	defer h.Close()
+	defer func() { _ = h.Close() }()
 	for _, w := range s.Warnings {
 		log.Warn(w)
 	}
@@ -138,14 +138,14 @@ func Run(args []string, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "%s: %v\n", progName, err)
 			return 1
 		}
-		defer fw.Close()
+		defer func() { _ = fw.Close() }()
 	}
 
 	var dial setup.Dialer
-	if sock := s.Global.ConfigSocket; sock != "" {
+	if sock := s.ConfigSocket; sock != "" {
 		dial = func() (net.Conn, error) { return setup.DialUnix(sock) }
 	} else {
-		cfgPort := s.Global.ConfigPort
+		cfgPort := s.ConfigPort
 		dial = func() (net.Conn, error) { return setup.DialReserved(cfgPort) }
 	}
 

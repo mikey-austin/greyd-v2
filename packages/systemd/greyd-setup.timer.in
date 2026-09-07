@@ -1,0 +1,16 @@
+# greyd-setup.timer - generated from packages/systemd/greyd-setup.timer.in
+# by make. Runs greyd-setup.service once a day; drop an override in
+# /etc/systemd/system/greyd-setup.timer.d/ to change the schedule (for
+# example OnCalendar=hourly to match the cron line suggested in INSTALL).
+
+[Unit]
+Description=Daily greyd blacklist refresh
+Documentation=man:greyd-setup(8)
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

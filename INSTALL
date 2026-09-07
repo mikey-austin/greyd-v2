@@ -4,7 +4,9 @@ Installing greyd
 Requirements
 ------------
 
-  * Go 1.25 or later (https://go.dev/dl/)
+  * Go 1.25 or later (https://go.dev/dl/); go.mod pins the patched 1.25.x
+    toolchain, which the go command downloads automatically (set
+    GOTOOLCHAIN=local to build with the installed release instead)
   * GNU make
   * curl at run time, used by greyd-setup to fetch blacklists over HTTP/FTP
   * Java, only if you edit the configuration grammar and need to run
@@ -130,6 +132,37 @@ be run periodically from cron, for example at 5 minutes past every hour:
 Init scripts for RHEL-like systems and Debian are installed alongside the
 sample configuration as greyd.redhat-init, greylogd.redhat-init,
 greyd.debian-init and greylogd.debian-init.
+
+systemd
+-------
+
+"make install" also installs systemd units, generated from the templates
+in packages/systemd/ with the configured paths, into $(unitdir), which
+defaults to $(prefix)/lib/systemd/system (pass unitdir=/lib/systemd/system
+or unitdir=/etc/systemd/system if your installation prefix is not on
+systemd's search path):
+
+    greyd.service         the main daemon (greyd -F, supervised in the
+                          foreground)
+    greylogd.service      the whitelist logger (Type=forking, follows
+                          greylogd_pidfile)
+    greyd-setup.service   one-shot blacklist refresh
+    greyd-setup.timer     runs greyd-setup.service daily
+
+The daemons are started as root and drop privileges themselves (see the
+drop_privs option in greyd.conf(5)); the units confine them with a reduced
+capability set and a read-only filesystem view apart from the state,
+runtime, pidfile and log directories. After creating the users and
+directories described above:
+
+    # systemctl daemon-reload
+    # systemctl enable --now greyd
+    # systemctl enable --now greylogd
+    # systemctl enable --now greyd-setup.timer
+    # systemctl start greyd-setup       # load the blacklists straight away
+
+The timer replaces the cron job above; override OnCalendar= in
+/etc/systemd/system/greyd-setup.timer.d/ to run it more often.
 
 Regenerating the configuration parser
 -------------------------------------

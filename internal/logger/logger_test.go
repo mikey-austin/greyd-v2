@@ -2,6 +2,7 @@ package logger
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -69,7 +70,7 @@ func TestSyslogSink(t *testing.T) {
 	log, _, _ := New(Options{Ident: "test", Syslog: true, Stderr: &bytes.Buffer{}})
 	log.Info("to syslog")
 	log.Error("bad")
-	log.Log(nil, LevelCrit, "fatal")
+	log.Log(context.Background(), LevelCrit, "fatal")
 	if len(got) != 3 || got[0] != "6:to syslog" || got[1] != "3:bad" || got[2] != "2:fatal" {
 		t.Fatalf("syslog got %v", got)
 	}

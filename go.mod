@@ -2,6 +2,8 @@ module github.com/mikey-austin/greyd-golang
 
 go 1.25.0
 
+toolchain go1.25.13
+
 require (
 	blitiri.com.ar/go/spf v1.6.0
 	github.com/antlr4-go/antlr/v4 v4.13.1

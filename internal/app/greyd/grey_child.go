@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"os"
 	"os/user"
+	"path/filepath"
 	"time"
 
 	"github.com/mikey-austin/greyd-golang/adapters/spf"
@@ -29,6 +30,7 @@ import (
 	"github.com/mikey-austin/greyd-golang/internal/grey"
 	"github.com/mikey-austin/greyd-golang/internal/privs"
 	"github.com/mikey-austin/greyd-golang/internal/procs"
+	"github.com/mikey-austin/greyd-golang/internal/sandbox"
 	"github.com/mikey-austin/greyd-golang/internal/settings"
 	gsync "github.com/mikey-austin/greyd-golang/internal/sync"
 )
@@ -75,6 +77,18 @@ var spfFactory = func() core.SPFChecker { return spf.New() }
 
 // scanInterval is the database scan period; replaced in tests.
 var scanInterval = grey.ScanInterval
+
+// greySandboxProfile is what the greylister still needs once running:
+// the resolver configuration for SPF lookups, the database directory and
+// the log file's directory.
+func greySandboxProfile(s *settings.Settings, store core.Store) sandbox.Profile {
+	p := sandbox.Profile{Role: sandbox.RoleGrey, ReadPaths: []string{"/etc"}}
+	p.WritePaths = append(p.WritePaths, core.WritablePaths(store)...)
+	if s.LogToFile != "" {
+		p.WritePaths = append(p.WritePaths, filepath.Dir(s.LogToFile))
+	}
+	return p
+}
 
 // runGreyChild is the greylisting process (Grey_start): a reader goroutine
 // consumes messages from the main process and a scanner goroutine
@@ -126,11 +140,11 @@ func runGreyChild(ctx context.Context, s *settings.Settings, files greyFiles, lo
 	if err := readerStore.Open(ctx, core.OpenRW); err != nil {
 		return err
 	}
-	defer readerStore.Close()
+	defer func() { _ = readerStore.Close() }()
 	if err := scannerStore.Open(ctx, core.OpenRW); err != nil {
 		return err
 	}
-	defer scannerStore.Close()
+	defer func() { _ = scannerStore.Close() }()
 
 	var checker core.SPFChecker
 	if s.SPF.Enable {
@@ -145,6 +159,9 @@ func runGreyChild(ctx context.Context, s *settings.Settings, files greyFiles, lo
 	scanner, err := grey.New(grey.Options{Settings: s, Store: scannerStore, TrapOut: files.trapOut, FwOut: files.fwOut, Startup: startup, Log: log})
 	if err != nil {
 		return err
+	}
+	if s.Sandbox {
+		applySandbox(greySandboxProfile(s, readerStore), log)
 	}
 
 	ctx, cancel := context.WithCancel(ctx)

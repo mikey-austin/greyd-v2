@@ -57,7 +57,7 @@ const (
 var schemaSQL string
 
 func init() {
-	core.RegisterStore(DriverName, func(cfg *config.Config, opts core.StoreOptions) (core.Store, error) {
+	core.RegisterStore(DriverName, "PostgreSQL server", func(cfg *config.Config, opts core.StoreOptions) (core.Store, error) {
 		return New(cfg, opts), nil
 	})
 }

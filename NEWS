@@ -5,6 +5,11 @@
         source port), max_config_frame, max_cons_per_source, max_line_length,
         grey.max_domains, setup.max_entries and sync.replay_window (replayed
         sync packets are dropped; a missing sync key is now warned about).
+        Each process now confines itself after dropping privileges when the
+        new sandbox option is on (the default): Landlock, seccomp and
+        no-new-privs on Linux, pledge on OpenBSD (untested by the authors;
+        set sandbox = 0 if it misbehaves). Systemd units with hardening
+        directives are generated and installed by make install.
         greyd gained -t (test the configuration), --drivers and --version.
         Unknown configuration variables are reported at start up. Internally
         the programs share a typed configuration schema, structured logging,

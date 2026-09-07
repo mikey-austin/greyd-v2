@@ -44,7 +44,8 @@ Building
 
 **greyd** is written in Go. Building requires:
 
-  * Go 1.25 or later
+  * Go 1.25 or later (go.mod pins the patched 1.25.x toolchain, which the go command
+    downloads automatically; set GOTOOLCHAIN=local to build with the installed one)
   * GNU make
   * Java (only for `make generate`, which regenerates the ANTLR configuration
     parser after editing the grammar; the generated sources are committed)
@@ -139,7 +140,9 @@ these corners:
 The port also adds a few hardening options, all off or generous by default so existing
 configurations behave as before: `config_socket` (a unix domain socket for **greyd-setup**
 checked against the peer's credentials), `max_config_frame`, `max_cons_per_source`,
-`max_line_length`, `max_domains`, `max_entries` and the sync `replay_window`. `greyd -t`
+`max_line_length`, `max_domains`, `max_entries` and the sync `replay_window`, plus `sandbox`
+(on by default: Landlock, seccomp and no-new-privs on Linux, pledge on OpenBSD, applied by each
+process after it drops privileges). `greyd -t`
 checks a configuration file and `greyd --drivers` lists the compiled-in drivers. See
 **greyd.conf**(5).
 

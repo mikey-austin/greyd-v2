@@ -8,3 +8,5 @@ etc/greyd.docker.conf
 etc/*-init
 *.swp
 *~
+packages/systemd/*.service
+packages/systemd/*.timer

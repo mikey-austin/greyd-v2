@@ -31,7 +31,7 @@ import (
 const DriverName = "dummy"
 
 func init() {
-	core.RegisterFirewall(DriverName, func(*config.Config, core.FirewallOptions) (core.Firewall, error) { return New(), nil })
+	core.RegisterFirewall(DriverName, "no-op firewall (testing, greylisting without a firewall)", func(*config.Config, core.FirewallOptions) (core.Firewall, error) { return New(), nil })
 }
 
 // Firewall records the sets it was asked to replace so tests can inspect

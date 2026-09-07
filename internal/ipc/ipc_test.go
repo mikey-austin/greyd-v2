@@ -73,7 +73,7 @@ func TestReaderRoundTrip(t *testing.T) {
 		t.Fatalf("sync grey message %+v", m)
 	}
 
-	if _, err := r.Next(); err != io.EOF {
+	if _, err := r.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("expected EOF, got %v", err)
 	}
 }
@@ -101,7 +101,7 @@ func TestReaderDecodeErrorThenContinue(t *testing.T) {
 	if _, err = r.Next(); !errors.Is(err, ErrUnknownMessage) {
 		t.Fatalf("unclassifiable: %v", err)
 	}
-	if _, err := r.Next(); err != io.EOF {
+	if _, err := r.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("expected EOF, got %v", err)
 	}
 }
@@ -112,10 +112,10 @@ func TestReaderUnterminatedFinalFrameAndLimits(t *testing.T) {
 	if err != nil || m.(*DstReply).Dst != "1.1.1.1" {
 		t.Fatalf("final frame: %v", err)
 	}
-	if _, err := r.Next(); err != io.EOF {
+	if _, err := r.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("expected EOF, got %v", err)
 	}
-	if _, err := NewReader(strings.NewReader("")).Next(); err != io.EOF {
+	if _, err := NewReader(strings.NewReader("")).Next(); !errors.Is(err, io.EOF) {
 		t.Fatal("empty stream should be EOF")
 	}
 	r = NewReader(strings.NewReader("a = 1\r\n%%\r\ndst=\"x\"\r\n%%\r\n"))

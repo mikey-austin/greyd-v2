@@ -278,7 +278,7 @@ func TestRunEndToEnd(t *testing.T) {
 	t.Cleanup(func() { memory.Reset(dbName) })
 
 	fw := &fakeFirewall{addrs: []string{"1.2.3.4"}}
-	core.RegisterFirewall("fake", func(*config.Config, core.FirewallOptions) (core.Firewall, error) { return fw, nil })
+	core.RegisterFirewall("fake", "fake", func(*config.Config, core.FirewallOptions) (core.Firewall, error) { return fw, nil })
 
 	dir := t.TempDir()
 	pidfile := filepath.Join(dir, "greylogd.pid")
@@ -286,6 +286,7 @@ func TestRunEndToEnd(t *testing.T) {
 	content := fmt.Sprintf(`
 daemonize = 0
 drop_privs = 0
+sandbox = 0
 syslog_enable = 0
 greylogd_pidfile = "%s"
 

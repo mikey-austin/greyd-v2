@@ -27,49 +27,87 @@ import (
 	"github.com/mikey-austin/greyd-golang/internal/config"
 )
 
+// DriverInfo describes a compiled-in driver.
+type DriverInfo struct {
+	Name        string
+	Description string
+}
+
+// registry is a named, sorted set of driver factories.
+type registry[F any] struct {
+	mu      sync.RWMutex
+	entries map[string]registryEntry[F]
+}
+
+type registryEntry[F any] struct {
+	info DriverInfo
+	new  F
+}
+
+func newRegistry[F any]() *registry[F] {
+	return &registry[F]{entries: map[string]registryEntry[F]{}}
+}
+
+func (r *registry[F]) register(name, description string, f F) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.entries[name] = registryEntry[F]{info: DriverInfo{Name: name, Description: description}, new: f}
+}
+
+func (r *registry[F]) lookup(name string) (F, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	e, ok := r.entries[name]
+	return e.new, ok
+}
+
+func (r *registry[F]) infos() []DriverInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]DriverInfo, 0, len(r.entries))
+	for _, e := range r.entries {
+		out = append(out, e.info)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+func (r *registry[F]) names() []string {
+	infos := r.infos()
+	out := make([]string, len(infos))
+	for i, d := range infos {
+		out[i] = d.Name
+	}
+	return out
+}
+
 var (
-	regMu     sync.RWMutex
-	stores    = map[string]StoreFactory{}
-	firewalls = map[string]FirewallFactory{}
+	stores    = newRegistry[StoreFactory]()
+	firewalls = newRegistry[FirewallFactory]()
 )
 
 // RegisterStore makes a database driver available under name. Adapters
-// call it from init().
-func RegisterStore(name string, f StoreFactory) {
-	regMu.Lock()
-	defer regMu.Unlock()
-	stores[name] = f
+// call it from init(); the description is shown by greyd --drivers.
+func RegisterStore(name, description string, f StoreFactory) {
+	stores.register(name, description, f)
 }
 
 // RegisterFirewall makes a firewall driver available under name.
-func RegisterFirewall(name string, f FirewallFactory) {
-	regMu.Lock()
-	defer regMu.Unlock()
-	firewalls[name] = f
+func RegisterFirewall(name, description string, f FirewallFactory) {
+	firewalls.register(name, description, f)
 }
 
 // StoreDrivers lists the registered database driver names.
-func StoreDrivers() []string {
-	regMu.RLock()
-	defer regMu.RUnlock()
-	return sortedKeys(stores)
-}
+func StoreDrivers() []string { return stores.names() }
 
 // FirewallDrivers lists the registered firewall driver names.
-func FirewallDrivers() []string {
-	regMu.RLock()
-	defer regMu.RUnlock()
-	return sortedKeys(firewalls)
-}
+func FirewallDrivers() []string { return firewalls.names() }
 
-func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
+// StoreDriverInfos lists the registered database drivers.
+func StoreDriverInfos() []DriverInfo { return stores.infos() }
+
+// FirewallDriverInfos lists the registered firewall drivers.
+func FirewallDriverInfos() []DriverInfo { return firewalls.infos() }
 
 // NormalizeDriver maps a configured driver value to a driver name. The C
 // implementation loaded shared objects, so existing configuration files
@@ -92,21 +130,27 @@ func NormalizeDriver(v string) string {
 	return v
 }
 
+// configuredDriver reads the driver name of a section.
+func configuredDriver(cfg *config.Config, section, what string) (raw, name string, err error) {
+	sec := cfg.Section(section)
+	if sec == nil {
+		return "", "", fmt.Errorf("could not find %s configuration", what)
+	}
+	raw = sec.Str("driver", "")
+	if raw == "" {
+		return "", "", fmt.Errorf("no %s driver configured", what)
+	}
+	return raw, NormalizeDriver(raw), nil
+}
+
 // OpenStore constructs the configured database driver. The store is not
 // yet opened (Store.Open must be called), mirroring DB_init/DB_open.
 func OpenStore(cfg *config.Config, opts StoreOptions) (Store, error) {
-	sec := cfg.Section("database")
-	if sec == nil {
-		return nil, fmt.Errorf("could not find database configuration")
+	raw, name, err := configuredDriver(cfg, "database", "database")
+	if err != nil {
+		return nil, err
 	}
-	raw := sec.Str("driver", "")
-	if raw == "" {
-		return nil, fmt.Errorf("no database driver configured")
-	}
-	name := NormalizeDriver(raw)
-	regMu.RLock()
-	f, ok := stores[name]
-	regMu.RUnlock()
+	f, ok := stores.lookup(name)
 	if !ok {
 		return nil, fmt.Errorf("unknown database driver %q (available: %s)", raw, strings.Join(StoreDrivers(), ", "))
 	}
@@ -116,18 +160,11 @@ func OpenStore(cfg *config.Config, opts StoreOptions) (Store, error) {
 // OpenFirewall constructs and opens the configured firewall driver
 // (FW_open).
 func OpenFirewall(ctx context.Context, cfg *config.Config, opts FirewallOptions) (Firewall, error) {
-	sec := cfg.Section("firewall")
-	if sec == nil {
-		return nil, fmt.Errorf("could not find firewall configuration")
+	raw, name, err := configuredDriver(cfg, "firewall", "firewall")
+	if err != nil {
+		return nil, err
 	}
-	raw := sec.Str("driver", "")
-	if raw == "" {
-		return nil, fmt.Errorf("no firewall driver configured")
-	}
-	name := NormalizeDriver(raw)
-	regMu.RLock()
-	f, ok := firewalls[name]
-	regMu.RUnlock()
+	f, ok := firewalls.lookup(name)
 	if !ok {
 		return nil, fmt.Errorf("unknown firewall driver %q (available: %s)", raw, strings.Join(FirewallDrivers(), ", "))
 	}
@@ -139,4 +176,19 @@ func OpenFirewall(ctx context.Context, cfg *config.Config, opts FirewallOptions)
 		return nil, fmt.Errorf("could not obtain firewall handle: %w", err)
 	}
 	return fw, nil
+}
+
+// FilesystemUser is implemented by stores that keep files on disk, so a
+// sandbox can leave their directories writable.
+type FilesystemUser interface {
+	// WritablePaths lists the directories the store writes to.
+	WritablePaths() []string
+}
+
+// WritablePaths returns the directories a store needs, if it says.
+func WritablePaths(s Store) []string {
+	if fu, ok := s.(FilesystemUser); ok {
+		return fu.WritablePaths()
+	}
+	return nil
 }

@@ -76,7 +76,7 @@ const (
 )
 
 func init() {
-	core.RegisterFirewall(DriverName, func(cfg *config.Config, opts core.FirewallOptions) (core.Firewall, error) {
+	core.RegisterFirewall(DriverName, "Linux netfilter: ipset, NFLOG and conntrack over netlink", func(cfg *config.Config, opts core.FirewallOptions) (core.Firewall, error) {
 		return New(cfg, opts), nil
 	})
 }
@@ -472,7 +472,7 @@ func (f *Firewall) LookupOrigDst(ctx context.Context, src, proxy netip.AddrPort)
 		f.log.Debug("netfilter: conntrack dial", "err", err)
 		return proxy, nil
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 	defer stop()
 

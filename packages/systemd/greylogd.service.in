@@ -1,0 +1,54 @@
+# greylogd.service - generated from packages/systemd/greylogd.service.in by make.
+#
+# greylogd is started as root on purpose: it opens NFLOG netlink sockets to
+# watch the firewall's connection log (CAP_NET_ADMIN, netfilter driver) and
+# then drops to the "greydb" user itself - controlled by the greyd.conf
+# option "drop_privs" (on by default, see greyd.conf(5)). Do not set User=
+# to anything else.
+#
+# greylogd has no foreground switch: it detaches itself (greyd.conf option
+# "daemonize", on by default) and writes greylogd_pidfile, so the unit is
+# Type=forking and follows that pidfile.
+
+[Unit]
+Description=greyd whitelist logger (greylogd)
+Documentation=man:greylogd(8) man:greyd.conf(5)
+After=network-online.target greyd.service
+Wants=network-online.target
+
+[Service]
+Type=forking
+PIDFile=@GREYLOGD_PIDFILE@
+ExecStart=@sbindir@/greylogd -f @DEFAULT_CONFIG@
+Restart=on-failure
+RestartSec=5
+User=root
+AmbientCapabilities=
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_NET_RAW CAP_SETUID CAP_SETGID CAP_SYS_CHROOT CAP_CHOWN CAP_DAC_OVERRIDE
+NoNewPrivileges=yes
+
+# Filesystem: everything read-only except the state, runtime, pidfile and
+# log locations. Paths prefixed with "-" are ignored when they do not exist.
+ProtectSystem=strict
+RuntimeDirectory=greylogd
+StateDirectory=@PACKAGE@
+ReadWritePaths=-@localstatedir@/@PACKAGE@ -@localstatedir@/run/@PACKAGE@ -@GREYLOGD_PIDDIR@ -@localstatedir@/log -/var/log
+ProtectHome=yes
+PrivateTmp=yes
+
+# Kernel and process hardening.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+# AF_NETLINK is required for NFLOG; AF_INET/AF_INET6 for sync and SQL
+# databases; AF_UNIX for local database sockets.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

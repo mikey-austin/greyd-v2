@@ -230,7 +230,7 @@ func TestReplayWindow(t *testing.T) {
 	cfg := syncCfg()
 	cfg.ReplayWindow = 0
 	e2, _ := New(cfg, true, nil)
-	if !e2.acceptCounter(from, 1) || !e2.acceptCounter(from, 1) {
+	if !e2.acceptCounter(from, 1) || !e2.acceptCounter(from, 0) || !e2.acceptCounter(from, 1) {
 		t.Fatal("disabled window")
 	}
 }

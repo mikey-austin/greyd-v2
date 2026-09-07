@@ -124,15 +124,15 @@ func ParseRecord(pkt []byte, trackOutbound bool, netIf string, af6 int) (addr st
 		}
 	}
 	dir := pkt[pflogOffDir]
-	if dir != PF_IN && !(dir == PF_OUT && trackOutbound) {
+	if dir != PF_IN && (dir != PF_OUT || !trackOutbound) {
 		return "", false
 	}
 
 	var src, dst netip.Addr
 	var tcp []byte
 	ip := pkt[hdrLen:]
-	switch af := int(pkt[pflogOffAf]); {
-	case af == AF_INET:
+	switch int(pkt[pflogOffAf]) {
+	case AF_INET:
 		if len(ip) < 20 || ip[0]>>4 != 4 {
 			return "", false
 		}
@@ -143,7 +143,7 @@ func ParseRecord(pkt []byte, trackOutbound bool, netIf string, af6 int) (addr st
 		src = netip.AddrFrom4([4]byte(ip[12:16]))
 		dst = netip.AddrFrom4([4]byte(ip[16:20]))
 		tcp = ip[ihl:]
-	case af == af6:
+	case af6:
 		if len(ip) < 40 || ip[0]>>4 != 6 || ip[6] != 6 /* next header TCP */ {
 			return "", false
 		}

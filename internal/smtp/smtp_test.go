@@ -55,7 +55,7 @@ func testLists() []*blacklist.Blacklist {
 	return []*blacklist.Blacklist{bl1, bl2, bl3}
 }
 
-func testConfig(t *testing.T) Config {
+func testConfig(t testing.TB) Config {
 	t.Helper()
 	cfg, err := parse.String(`hostname = "greyd.org"
 banner   = "greyd IP-based SPAM blocker"
@@ -85,7 +85,7 @@ type harness struct {
 	lists    []*blacklist.Blacklist
 }
 
-func newHarness(t *testing.T, maxCons, maxBlack int) *harness {
+func newHarness(t testing.TB, maxCons, maxBlack int) *harness {
 	h := &harness{cfg: testConfig(t), clock: &fakeClock{now: fixedNow}, greyOut: &bytes.Buffer{}, lists: testLists()}
 	h.counters = NewCounters(maxCons, maxBlack)
 	h.deps = Deps{
@@ -514,6 +514,16 @@ func TestProxyProtocolDialogue(t *testing.T) {
 	m, err := ipc.NewReader(bytes.NewReader(h.greyOut.Bytes())).Next()
 	if g, ok := m.(*ipc.GreyMessage); err != nil || !ok || g.DstIP != "192.0.2.99" || g.Tuple.IP != "10.10.10.9" {
 		t.Fatalf("proxied grey message: %v %s", err, h.greyOut.String())
+	}
+}
+
+func TestProxyHeaderBounded(t *testing.T) {
+	long := "PROXY TCP4 1.1.1.1 2.2.2.2 1 2" + strings.Repeat(" ", MaxProxyHeader)
+	if _, _, err := ParseProxyHeader(long); !errors.Is(err, ErrProxyInvalid) {
+		t.Fatalf("oversized header: %v", err)
+	}
+	if _, _, err := ParseProxyHeader("PROXY TCP4 1.1.1.1 2.2.2.2 1 2"); err != nil {
+		t.Fatalf("normal header: %v", err)
 	}
 }
 

@@ -58,7 +58,7 @@ const (
 )
 
 func init() {
-	core.RegisterFirewall(DriverName, func(cfg *config.Config, opts core.FirewallOptions) (core.Firewall, error) {
+	core.RegisterFirewall(DriverName, "BSD packet filter via /dev/pf and pfctl", func(cfg *config.Config, opts core.FirewallOptions) (core.Firewall, error) {
 		return New(cfg, opts), nil
 	})
 }

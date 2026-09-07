@@ -17,6 +17,7 @@
 package setup
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -44,10 +45,10 @@ const (
 // by section, selecting the source as get_parser does in main_greyd_setup.c:
 // "file" (or no method) opens a local file, "http"/"ftp" run curl and
 // "exec" runs the "file" variable as a command line.
-func Open(section *config.Section, cfg settings.Setup) (io.ReadCloser, error) {
+func Open(ctx context.Context, section *config.Section, cfg settings.Setup) (io.ReadCloser, error) {
 	file := section.Str("file", "")
 	if file == "" {
-		return nil, errors.New("No file configuration variables set")
+		return nil, errors.New("no file configuration variables set")
 	}
 	method := section.Str("method", "")
 
@@ -55,10 +56,10 @@ func Open(section *config.Section, cfg settings.Setup) (io.ReadCloser, error) {
 		rc  io.ReadCloser
 		err error
 	)
-	switch {
-	case method == "" || method == MethodFile:
+	switch method {
+	case "", MethodFile:
 		rc, err = os.Open(file)
-	case method == MethodHTTP || method == MethodFTP:
+	case MethodHTTP, MethodFTP:
 		curl := cfg.CurlPath
 		if curl == "" {
 			curl = DefaultCurl
@@ -68,15 +69,15 @@ func Open(section *config.Section, cfg settings.Setup) (io.ReadCloser, error) {
 			args = append(args, "--proxy", proxy)
 		}
 		args = append(args, method+"://"+file)
-		rc, err = openChild(curl, args...)
-	case method == MethodExec:
+		rc, err = openChild(ctx, curl, args...)
+	case MethodExec:
 		argv := strings.FieldsFunc(file, func(r rune) bool { return r == ' ' || r == '\t' })
 		if len(argv) == 0 {
-			return nil, errors.New("No file configuration variables set")
+			return nil, errors.New("no file configuration variables set")
 		}
-		rc, err = openChild(argv[0], argv[1:]...)
+		rc, err = openChild(ctx, argv[0], argv[1:]...)
 	default:
-		return nil, fmt.Errorf("Unknown method %s", method)
+		return nil, fmt.Errorf("unknown method %s", method)
 	}
 	if err != nil {
 		return nil, err
@@ -84,7 +85,7 @@ func Open(section *config.Section, cfg settings.Setup) (io.ReadCloser, error) {
 
 	r, err := spamdlist.OpenMaybeGzip(rc)
 	if err != nil {
-		rc.Close()
+		_ = rc.Close()
 		return nil, err
 	}
 	return &readCloser{Reader: r, closer: rc}, nil
@@ -111,8 +112,8 @@ func (c *childReader) Close() error {
 
 // openChild starts name with args and returns its standard output
 // (open_child).
-func openChild(name string, args ...string) (io.ReadCloser, error) {
-	cmd := exec.Command(name, args...)
+func openChild(ctx context.Context, name string, args ...string) (io.ReadCloser, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.StdoutPipe()
 	if err != nil {

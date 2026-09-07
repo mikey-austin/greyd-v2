@@ -154,7 +154,7 @@ func Scan(ops Ops, now, whiteExp int64) (core.ScanResult, error) {
 	if err != nil {
 		return res, err
 	}
-	defer it.Close()
+	defer func() { _ = it.Close() }()
 
 	addWhite := func(addr string) {
 		if seen[addr] {

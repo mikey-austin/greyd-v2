@@ -26,6 +26,7 @@ import (
 	"net"
 	"os"
 	"syscall"
+	"time"
 
 	"github.com/mikey-austin/greyd-golang/internal/blacklist"
 	"github.com/mikey-austin/greyd-golang/internal/config"
@@ -101,7 +102,7 @@ func Run(ctx context.Context, s *settings.Settings, o Options, fw core.Firewall,
 			continue
 		}
 
-		src, err := Open(section, s.Setup)
+		src, err := Open(r.ctx, section, s.Setup)
 		if err != nil {
 			log.Warn("ignoring list", "list", name, "err", err)
 			continue
@@ -109,7 +110,7 @@ func Run(ctx context.Context, s *settings.Settings, o Options, fw core.Firewall,
 
 		count := current.Count
 		err = spamdlist.ParseLimited(src, current, bltype, s.Setup.MaxEntries)
-		src.Close()
+		_ = src.Close()
 		var perr *spamdlist.Error
 		if errors.As(err, &perr) {
 			log.Warn("blacklist parse error", "list", name, "line", perr.Line, "col", perr.Col)
@@ -152,11 +153,11 @@ func (r *runner) send(bl *blacklist.Blacklist, final bool) error {
 		r.allCidrs = append(r.allCidrs, cidrs...)
 		if final {
 			if r.fw == nil {
-				return errors.New("Could not configure firewall")
+				return errors.New("could not configure firewall")
 			}
 			n, err := r.fw.Replace(r.ctx, FirewallSet, r.allCidrs, core.IPv4)
 			if err != nil {
-				return fmt.Errorf("Could not configure firewall: %w", err)
+				return fmt.Errorf("could not configure firewall: %w", err)
 			}
 			if r.o.Debug {
 				r.o.Debugf("%d entries added to firewall\n", n)
@@ -168,12 +169,15 @@ func (r *runner) send(bl *blacklist.Blacklist, final bool) error {
 	if err != nil {
 		return fmt.Errorf("could not connect to greyd-config: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if err := ipc.WriteBlacklist(conn, bl.Name, bl.Message, cidrs); err != nil {
 		return fmt.Errorf("could not write to greyd-config: %w", err)
 	}
 	return nil
 }
+
+// dialTimeout bounds connecting to greyd.
+const dialTimeout = 10 * time.Second
 
 // DialReserved connects to greyd's configuration port on the loopback
 // interface from a privileged source port, which greyd requires of
@@ -182,8 +186,8 @@ func DialReserved(port int) (net.Conn, error) {
 	remote := net.JoinHostPort("127.0.0.1", fmt.Sprint(port))
 	var lastErr error
 	for p := 1023; p >= 512; p-- {
-		d := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: p}}
-		conn, err := d.Dial("tcp", remote)
+		d := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: p}, Timeout: dialTimeout}
+		conn, err := d.DialContext(context.Background(), "tcp", remote)
 		if err == nil {
 			return conn, nil
 		}
@@ -207,12 +211,14 @@ func isBindError(err error) bool {
 // DialUnix connects to greyd's configuration socket when config_socket is
 // set; greyd checks the peer credentials instead of the source port.
 func DialUnix(path string) (net.Conn, error) {
-	return net.Dial("unix", path)
+	d := net.Dialer{Timeout: dialTimeout}
+	return d.DialContext(context.Background(), "unix", path)
 }
 
 // DialAny connects to greyd's configuration port on the loopback
 // interface from any source port. It is for tests and for daemons started
 // without the privilege to bind reserved ports.
 func DialAny(port int) (net.Conn, error) {
-	return net.Dial("tcp", net.JoinHostPort("127.0.0.1", fmt.Sprint(port)))
+	d := net.Dialer{Timeout: dialTimeout}
+	return d.DialContext(context.Background(), "tcp", net.JoinHostPort("127.0.0.1", fmt.Sprint(port)))
 }
