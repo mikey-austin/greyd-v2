@@ -162,7 +162,18 @@ func (s *Store) Open(ctx context.Context, mode core.OpenMode) error {
 	}
 	// Temporary tables and sort spills stay in memory, so the process
 	// needs no scratch directory once sandboxed.
-	db, err := sql.Open("sqlite", "file:"+s.path+"?_pragma=temp_store(memory)&_pragma=busy_timeout(5000)")
+	dsn := "file:" + s.path + "?_pragma=temp_store(memory)&_pragma=busy_timeout(5000)"
+	if mode == core.OpenRW {
+		// Write-ahead logging lets readers (greydb, greyd-monitor) run
+		// concurrently with the greylister's writes without either
+		// blocking the other; synchronous=NORMAL is the recommended and
+		// safe durability level under WAL. Only a read-write open sets
+		// it: converting the journal mode is itself a write, and a
+		// read-only open must leave no -wal/-shm sidecars behind (see
+		// TestGoldenFixture).
+		dsn += "&_pragma=journal_mode(WAL)&_pragma=synchronous(normal)"
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("could not open %s: %w", s.path, err)
 	}

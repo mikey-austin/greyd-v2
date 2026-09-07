@@ -42,6 +42,7 @@ import (
 	"github.com/mikey-austin/greyd-v2/adapters/db/kv"
 	"github.com/mikey-austin/greyd-v2/internal/config"
 	"github.com/mikey-austin/greyd-v2/internal/core"
+	"github.com/mikey-austin/greyd-v2/internal/ip"
 	"github.com/mikey-austin/greyd-v2/internal/logger"
 )
 
@@ -309,11 +310,129 @@ func (t *tx) Iter(types core.IterTypes) (core.Iterator, error) {
 	return it, nil
 }
 
+// kvPut is a deferred write applied after the cursor walk.
+type kvPut struct {
+	key  []byte
+	data []byte
+}
+
+// Scan implements Store.Scan natively for bbolt, streaming the entries
+// bucket with a cursor instead of materialising every key into memory the
+// way the shared kv.Scan does. It reproduces kv.Scan's semantics exactly.
+//
+// bbolt forbids mutating a bucket while a cursor over it is live, so the
+// expiry deletions and the address re-keying of passed tuples are
+// collected during the walk and applied afterwards, still inside the same
+// write transaction. Encoded keys sort by their leading type byte, so
+// every address entry (KeyIP == 1) is visited before any tuple
+// (KeyTuple == 3); the scan relies on that ordering, mirroring the address
+// state a tuple would observe under immediate mutation via addrState.
 func (t *tx) Scan(now, whiteExp int64) (core.ScanResult, error) {
 	if !t.btx.Writable() {
 		return core.ScanResult{}, core.ErrReadOnly
 	}
-	return kv.Scan(t, now, whiteExp)
+	var res core.ScanResult
+	bk := bucket(t.btx, kv.BucketEntries)
+	if bk == nil {
+		return res, fmt.Errorf("bolt: bucket %s does not exist", kv.BucketEntries)
+	}
+
+	seen := map[string]bool{}
+	addWhite := func(addr string) {
+		if seen[addr] {
+			return
+		}
+		seen[addr] = true
+		if ip.CheckAddr(addr) == 6 {
+			res.WhitelistV6 = append(res.WhitelistV6, addr)
+		} else {
+			res.Whitelist = append(res.Whitelist, addr)
+		}
+	}
+
+	var dels [][]byte
+	var puts []kvPut
+	deletedIP := map[string]bool{} // address entries marked expired this pass
+	addedIP := map[string]bool{}   // addresses re-keyed from passed tuples
+
+	// addrState mirrors core.AddrState against the state an immediate
+	// mutation scan would see at this point in the walk: re-keyed
+	// addresses count as present, expired-and-deleted ones as absent.
+	addrState := func(addr string) (int, error) {
+		if addedIP[addr] {
+			return 2, nil
+		}
+		v := bk.Get(kv.EncodeKey(core.IPKey(addr)))
+		if v == nil || deletedIP[addr] {
+			return 0, nil
+		}
+		d, err := kv.DecodeData(v)
+		if err != nil {
+			return -1, err
+		}
+		if d.PCount == core.PCountTrapped {
+			return 1, nil
+		}
+		return 2, nil
+	}
+
+	c := bk.Cursor()
+	for raw, val := c.First(); raw != nil; raw, val = c.Next() {
+		k, err := kv.DecodeKey(raw)
+		if err != nil {
+			return res, err
+		}
+		d, err := kv.DecodeData(val)
+		if err != nil {
+			return res, err
+		}
+		switch {
+		case d.Expire <= now && d.PCount > core.PCountSpamtrap:
+			dels = append(dels, append([]byte(nil), raw...))
+			if k.Type == core.KeyIP {
+				deletedIP[k.Str] = true
+			}
+		case d.PCount == core.PCountTrapped && k.Type == core.KeyIP:
+			res.Traplist = append(res.Traplist, k.Str)
+		case d.PCount >= 0 && d.Pass <= now:
+			switch k.Type {
+			case core.KeyTuple:
+				state, err := addrState(k.Tuple.IP)
+				if err != nil {
+					return res, err
+				}
+				if state != 0 {
+					// Trapped or already whitelisted: leave the tuple alone.
+					continue
+				}
+				d.Expire = now + whiteExp
+				puts = append(puts, kvPut{
+					key:  kv.EncodeKey(core.IPKey(k.Tuple.IP)),
+					data: kv.EncodeData(d),
+				})
+				addedIP[k.Tuple.IP] = true
+				dels = append(dels, append([]byte(nil), raw...))
+				addWhite(k.Tuple.IP)
+			case core.KeyIP:
+				addWhite(k.Str)
+			}
+		}
+	}
+
+	// Apply deferred mutations after the cursor walk. Deletes run first so
+	// a tuple re-keying an expired address restores its entry, matching
+	// the immediate-mutation ordering of kv.Scan.
+	for _, dk := range dels {
+		if err := bk.Delete(dk); err != nil {
+			return res, err
+		}
+	}
+	for _, p := range puts {
+		if err := bk.Put(p.key, p.data); err != nil {
+			return res, err
+		}
+	}
+	return res, nil
 }
 
 type iterator struct {
