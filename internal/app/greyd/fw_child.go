@@ -85,13 +85,16 @@ func runFwChild(ctx context.Context, s *settings.Settings, files fwFiles, log *s
 	}
 	defer func() { _ = fw.Close() }()
 
-	if err := dropMainPrivs(s, driverIsPF(s), log); err != nil {
+	if core.KeepsPrivileges(fw) {
+		log.Warn("firewall driver needs its privileges on every call; the firewall process keeps them", "driver", s.Firewall.Driver)
+	} else if err := dropMainPrivs(s, driverIsPF(s), log); err != nil {
 		return err
 	}
 	if s.Sandbox {
-		// pf needs pfctl and ioctl on /dev/pf; netfilter only netlink.
-		pf := driverIsPF(s)
-		applySandbox(sandbox.Profile{Role: sandbox.RoleFirewall, Exec: pf, Devices: pf, Strict: s.SandboxStrict}, log)
+		// pf needs pfctl and ioctl on /dev/pf, ipfw its command; netfilter
+		// only netlink.
+		helper := driverIsPF(s) || driverIsIpfw(s)
+		applySandbox(sandbox.Profile{Role: sandbox.RoleFirewall, Exec: helper, Devices: helper, Strict: s.SandboxStrict}, log)
 	}
 
 	h := &fwHandler{fw: fw, out: files.natOut, log: log}
@@ -128,6 +131,11 @@ func runFwChild(ctx context.Context, s *settings.Settings, files fwFiles, log *s
 // needs filesystem access (pfctl) and so is not chrooted (WITH_PF in C).
 func driverIsPF(s *settings.Settings) bool {
 	return core.NormalizeDriver(s.Firewall.Driver) == "pf"
+}
+
+// driverIsIpfw reports whether the FreeBSD ipfw driver is configured.
+func driverIsIpfw(s *settings.Settings) bool {
+	return core.NormalizeDriver(s.Firewall.Driver) == "ipfw"
 }
 
 // dropMainPrivs chroots (unless skipChroot) and switches to the main user

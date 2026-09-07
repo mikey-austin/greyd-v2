@@ -109,7 +109,9 @@ For GNU/Linux, a firewall driver has been implemented for the netfilter ecosyste
   * **NFLOG** for the tracking and auto-whitelisting of connections
   * **conntrack** for the DNAT original destination lookups
 
-For the BSDs, a **PF** firewall driver has been implemented. A **dummy** firewall driver is also available.
+For the BSDs, a **PF** firewall driver has been implemented, and FreeBSD additionally has a native
+**ipfw** driver (lookup tables, ipfw0 log capture, fwd redirects). A **dummy** firewall driver is
+also available.
 
 ### Status of the Go port
 
@@ -118,8 +120,8 @@ programs, configuration files, command line switches, wire protocols and sync pr
 is a drop-in replacement. The process model, the pipes between the processes and the
 ports & adapters layout of the code are described in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 The following points remain to be done:
-  * the **netfilter** and **pf** firewall drivers have been ported but still need verification
-    on real hosts (the port was developed without root access to a suitable kernel)
+  * the **netfilter** driver is verified end to end in CI (privileged container) and the **pf**
+    driver and pledge sandbox in an OpenBSD VM; the **ipfw** driver is exercised in a FreeBSD VM
   * the **npf** (NetBSD) firewall driver has not yet been ported; on NetBSD the **pf** driver
     falls back to the proxy address for original destination lookups
   * the **sqlite** driver is not available on DragonFly BSD (the embedded SQLite has no port

@@ -29,10 +29,11 @@
         with Landlock ABI 4, TCP connect rules that limit the greylister to
         DNS and its database server. Packages (deb, rpm), signed release
         archives with SBOMs, a coverage gate, Dependabot, an architecture
-        document and an end to end integration harness (Linux container
-        and OpenBSD VM, including a sync protocol compatibility test
-        against the spamd of the OpenBSD base system) round out the
-        tooling. The harness found and fixed
+        document and an end to end integration harness (Linux container,
+        OpenBSD VM and FreeBSD VM, including a sync protocol compatibility
+        test against the spamd of the OpenBSD base system) round out the
+        tooling. A native FreeBSD firewall driver, ipfw, joins netfilter
+        and pf. The harness found and fixed
         three defects of the port: the netfilter firewall process crashed
         after dropping privileges (keep-caps was set on one thread only,
         and the capability set was narrowed before the drop), multi-line

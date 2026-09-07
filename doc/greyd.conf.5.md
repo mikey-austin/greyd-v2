@@ -155,7 +155,7 @@ The following options may be specified outside of a section. A *boolean* value i
 The following options are common to all firewall drivers:
 
 * **driver** = *string*:
-  The name of the firewall driver to use. All drivers are compiled into the programs and are selected by name. May be one of *netfilter*, *pf* or *dummy*. Legacy values from previous releases such as *"/usr/lib/greyd/greyd_netfilter.so"* or *"greyd_netfilter.la"* are still accepted: the basename is used and the *greyd_* prefix and *.so*/*.la* suffix are ignored. For example:
+  The name of the firewall driver to use. All drivers are compiled into the programs and are selected by name. May be one of *netfilter*, *pf*, *ipfw* or *dummy*. Legacy values from previous releases such as *"/usr/lib/greyd/greyd_netfilter.so"* or *"greyd_netfilter.la"* are still accepted: the basename is used and the *greyd_* prefix and *.so*/*.la* suffix are ignored. For example:
 
         section firewall {
             #driver = "pf"
@@ -197,6 +197,22 @@ This driver runs on BSD systems making use of the PF firewall. Tables are replac
 
 * **pflog_if** = *string*:
   Pflog interface to listen for logged packets, defaults to *pflog0*.
+
+### IPFW firewall driver
+
+This driver runs on FreeBSD with the *ipfw* firewall. Whitelists are kept in ipfw lookup tables (*type addr*, holding IPv4 and IPv6 prefixes) which are replaced atomically: the entries are loaded into a staging table named after the set with *_new* appended and swapped into place with *ipfw table swap*. Connections are tracked by reading the *ipfw0* log interface with *bpf*; the original destination of a redirected connection is the address the connection arrived on, since *ipfw fwd* delivers the packet to the local socket without rewriting it. The ipfw control socket checks privileges on every operation, so the process holding this driver keeps them (see [PRIVILEGE SEPARATION AND SANDBOXING][] in **greyd**(8)).
+
+* **ipfw_path** = *string*:
+  Path to the ipfw utility, defaults to */sbin/ipfw*.
+
+* **ipfw_log_if** = *string*:
+  The ipfw log interface to read logged packets from, defaults to *ipfw0*. Create it with *ifconfig ipfw0 create* and set *net.inet.ip.fw.verbose* to *0* so that logged packets go to the interface rather than to syslog.
+
+* **net_if** = *string*:
+  When set, only the addresses of this interface count as local when deciding whether a logged SMTP connection is inbound (whitelist its source) or outbound (whitelist its destination). Defaults to all interfaces.
+
+* **track_outbound** = *boolean*:
+  Track outbound connections. See **greylogd**(8) for more details.
 
 * **net_if** = *string*:
   Network interface to restrict monitored logged packets to. Not set by default.

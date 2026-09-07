@@ -64,3 +64,45 @@ jobs:
             sh packages/integration/run-openbsd.sh
             echo "== spamd sync compatibility"
             sh packages/integration/run-openbsd-sync.sh
+
+  # The ipfw firewall driver in a FreeBSD VM: vet, the test tree and the
+  # smoke test in packages/integration/run-freebsd.sh. Informational until
+  # seen green, like the OpenBSD job.
+  freebsd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: FreeBSD vet, test and ipfw smoke test
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: '14.3'
+          usesh: true
+          sync: rsync
+          copyback: false
+          prepare: |
+            pkg install -y go || true
+          run: |
+            set -e
+            export GOFLAGS=-buildvcs=false GOTOOLCHAIN=local
+            want=$(sed -n 's/^toolchain go//p' go.mod)
+            [ -n "$want" ] || want=$(sed -n 's/^go //p' go.mod)
+            have=$(go version 2>/dev/null | sed -n 's/^go version go\([0-9.]*\).*/\1/p')
+            echo "go.mod wants go$want, packaged go is '${have:-none}'"
+            if [ "$have" != "$want" ]; then
+              echo "installing go$want from go.dev"
+              fetch -o /tmp/go.tgz "https://go.dev/dl/go$want.freebsd-amd64.tar.gz"
+              rm -rf /usr/local/go
+              tar -C /usr/local -xzf /tmp/go.tgz
+              ln -sf /usr/local/go/bin/go /usr/local/bin/go
+              ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+              hash -r
+            fi
+            go version
+            echo "== go vet"
+            go vet -unreachable=false ./...
+            echo "== go test"
+            go test ./...
+            echo "== ipfw smoke test"
+            sh packages/integration/run-freebsd.sh

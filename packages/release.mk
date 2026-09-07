@@ -98,13 +98,18 @@ release-snapshot:
 COVER_MIN     ?= 50
 COVERPROFILE  ?= coverage.out
 
+# -coverpkg attributes statements to the package they live in (so shared
+# code exercised by another package's tests counts); the generated ANTLR
+# parser and the conformance helpers are left out of the total.
 coverage:
-	CGO_ENABLED=0 $(GO) test -coverprofile=$(COVERPROFILE) -covermode=atomic ./...
+	CGO_ENABLED=0 $(GO) test -coverprofile=$(COVERPROFILE).raw -covermode=atomic -coverpkg=./... ./...
+	grep -v -e '/internal/config/grammar/' -e '/adapters/db/dbtest/' $(COVERPROFILE).raw > $(COVERPROFILE)
 	@echo "per-package statement coverage:"
-	@awk 'NR > 1 { \
-	    split($$1, a, ":"); p = a[1]; sub(/\/[^\/]*$$/, "", p); \
-	    stmts[p] += $$2; if ($$3 > 0) cov[p] += $$2 } \
-	    END { for (p in stmts) printf "  %6.1f%%  %s\n", 100 * cov[p] / stmts[p], p }' \
+	@awk 'NR > 1 && !($$1 in seen) { seen[$$1] = 1; \
+	    split($$1, a, ":"); p = a[1]; sub(/\/[^\/]*$$/, "", p); pkg[$$1] = p; n[$$1] = $$2 } \
+	    NR > 1 && $$3 > 0 { hit[$$1] = 1 } \
+	    END { for (b in seen) { stmts[pkg[b]] += n[b]; if (hit[b]) cov[pkg[b]] += n[b] } \
+	          for (p in stmts) printf "  %6.1f%%  %s\n", 100 * cov[p] / stmts[p], p }' \
 	    $(COVERPROFILE) | sort -k2
 	@total=$$($(GO) tool cover -func=$(COVERPROFILE) | tail -1 | awk '{ print $$NF }' | tr -d %); \
 	echo "total: $$total% (minimum $(COVER_MIN)%)"; \

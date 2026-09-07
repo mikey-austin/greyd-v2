@@ -22,8 +22,14 @@ jobs:
         with:
           go-version: '1.25'
 
+      # -coverpkg attributes coverage to the package a statement lives in
+      # rather than to the package whose tests ran, so shared code such as
+      # the SQL adapter base counts. The generated ANTLR parser and the
+      # conformance test helpers are left out of the total.
       - name: test with coverage
-        run: go test -coverprofile=cover.out -covermode=atomic ./...
+        run: |
+          go test -coverprofile=cover.raw -covermode=atomic -coverpkg=./... ./...
+          grep -v -e '/internal/config/grammar/' -e '/adapters/db/dbtest/' cover.raw > cover.out
 
       - name: report
         run: |

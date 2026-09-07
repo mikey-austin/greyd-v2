@@ -30,6 +30,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mikey-austin/greyd-v2/adapters/fw/dummy"
 	"github.com/mikey-austin/greyd-v2/internal/config"
@@ -98,12 +99,27 @@ func (g *fakeGreyd) dial() (net.Conn, error) {
 	return net.Dial("tcp", g.ln.Addr().String())
 }
 
-// received waits for every accepted connection to be read and returns the
-// frames in arrival order.
-func (g *fakeGreyd) received(t *testing.T) []frame {
+// received waits until want frames have arrived (or two seconds pass),
+// then stops accepting, waits for the readers and returns the frames in
+// arrival order. Run closes its connections before returning, but the
+// accept loop may not have taken the last one out of the backlog yet, and
+// closing the listener would discard it.
+func (g *fakeGreyd) received(t *testing.T, want int) []frame {
 	t.Helper()
-	// Run has closed every connection before returning, so the readers
-	// finish once they see EOF; stop accepting and wait for them.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		g.mu.Lock()
+		n := len(g.frames)
+		g.mu.Unlock()
+		if n >= want || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if want == 0 {
+		// Nothing expected: give a stray frame a moment to show up.
+		time.Sleep(200 * time.Millisecond)
+	}
 	g.ln.Close()
 	g.wg.Wait()
 	g.mu.Lock()
@@ -207,7 +223,7 @@ func TestRunSendsCollapsedLists(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	frames := g.received(t)
+	frames := g.received(t, 2)
 	want := []frame{
 		{name: "bl1", message: "bl1 message", ips: []string{"10.0.0.0/24"}},
 		{name: "bl2", message: "bl2 message", ips: []string{"192.168.1.1/32", "192.168.1.2/31"}},
@@ -243,7 +259,7 @@ func TestRunGreyOnlySkipsFirewall(t *testing.T) {
 	if err := Run(context.Background(), load(t, cfg), Options{GreyOnly: true}, nil, g.dial); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got := len(g.received(t)); got != 2 {
+	if got := len(g.received(t, 2)); got != 2 {
 		t.Fatalf("frames = %d, want 2", got)
 	}
 }
@@ -273,7 +289,7 @@ func TestRunDryrunSendsNothing(t *testing.T) {
 	if dialed {
 		t.Fatal("dryrun dialled greyd")
 	}
-	if got := len(g.received(t)); got != 0 {
+	if got := len(g.received(t, 0)); got != 0 {
 		t.Fatalf("frames = %d, want 0", got)
 	}
 	if set := fw.Set(FirewallSet); len(set) != 0 {
@@ -314,7 +330,7 @@ blacklist nofile {
 	if err := Run(context.Background(), load(t, cfg), Options{GreyOnly: true, Log: lg}, nil, g.dial); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	frames := g.received(t)
+	frames := g.received(t, 2)
 	var names []string
 	for _, f := range frames {
 		names = append(names, f.name)
@@ -356,7 +372,7 @@ blacklist bad { file = "%s" }
 	if err := Run(context.Background(), load(t, cfg), Options{GreyOnly: true, Log: lg}, nil, g.dial); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	frames := g.received(t)
+	frames := g.received(t, 1)
 	if len(frames) != 1 {
 		t.Fatalf("frames = %+v, want 1", frames)
 	}

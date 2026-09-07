@@ -205,6 +205,16 @@ When running in default mode, the *iptables* rules described above are sufficien
     # iptables -t filter -A INPUT -p tcp --dport smtp -j ACCEPT
     # iptables -t filter -A INPUT -p tcp --dport 8025 -d 127.0.0.1 -j ACCEPT
 
+With the *ipfw* driver on FreeBSD the equivalent ruleset is:
+
+    # ipfw table greyd-whitelist create type addr
+    # ipfw add allow tcp from table\(greyd-whitelist\) to me 25 setup
+    # ipfw add fwd 127.0.0.1,8025 tcp from any to me 25 setup in
+    # ipfw add count log tcp from any to me 25 setup in
+    # ipfw add count log tcp from me to any 25 setup out
+
+The *fwd* rule keeps the packet's destination, so **greyd** learns the original address from the connection itself; the two *log* rules feed **greylogd**(8) through the *ipfw0* interface (*ifconfig ipfw0 create*, *sysctl net.inet.ip.fw.verbose=0*).
+
 Addresses can be loaded into the table with the *ipset* command (consult the *ipset* manual for more details), like:
 
     # ipset add greyd-blacklist 1.2.3.4/30

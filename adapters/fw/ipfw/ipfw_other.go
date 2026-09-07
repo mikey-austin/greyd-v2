@@ -1,3 +1,5 @@
+//go:build !freebsd
+
 /*
  * Copyright (c) 2014-2026 Mikey Austin <mikey@greyd.org>
  *
@@ -14,12 +16,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-// Package all registers every firewall driver. Programs blank-import it.
-package all
-
-import (
-	_ "github.com/mikey-austin/greyd-v2/adapters/fw/dummy"
-	_ "github.com/mikey-austin/greyd-v2/adapters/fw/ipfw"
-	_ "github.com/mikey-austin/greyd-v2/adapters/fw/netfilter"
-	_ "github.com/mikey-austin/greyd-v2/adapters/fw/pf"
-)
+// On other systems this package only provides the portable log record
+// parser and table plan; no firewall driver is registered.
+package ipfw

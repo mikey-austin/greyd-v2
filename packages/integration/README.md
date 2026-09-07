@@ -298,3 +298,25 @@ port 8025/udp. spamd's SMTP listener is moved to 18025 with `-p`.
 
 The CI job runs it after the pf smoke test. On failure the script dumps
 both databases, both logs and the bound sockets.
+
+## FreeBSD smoke test (ipfw)
+
+`run-freebsd.sh` exercises the native ipfw driver in a FreeBSD VM: it loads
+ipfw (default accept), creates the `ipfw0` log interface, installs `fwd`
+rules from loopback port 2525 to greyd's 8025 and a `count log` rule for
+SYNs to port 25, then checks that
+
+- a greylisted dialogue through the `fwd` rule gets a 451 and a GREY tuple;
+- the whitelist entry reaches the `greyd-whitelist` ipfw table (staging
+  table swapped in by the privileged firewall process);
+- greylogd whitelists the source of a SYN logged on `ipfw0`;
+- a connection to the low priority MX alias through `fwd` is trapped, which
+  proves the original destination survives the redirect;
+- a blacklist pushed by greyd-setup over the unix socket takes effect;
+- greyd exits cleanly.
+
+    # sh packages/integration/run-freebsd.sh
+
+The firewall process keeps root with this driver because the ipfw control
+socket checks privileges on every call; the main and greylister processes
+still drop to greyd and greydb.

@@ -58,6 +58,20 @@ type Firewall interface {
 	LookupOrigDst(ctx context.Context, src, proxy netip.AddrPort) (netip.AddrPort, error)
 }
 
+// PrivilegeKeeper is implemented by firewall drivers whose operations need
+// the process's privileges for their whole lifetime (ipfw's control socket
+// checks them on every call); greyd then keeps the firewall process
+// privileged instead of dropping to the unprivileged user.
+type PrivilegeKeeper interface {
+	KeepPrivileges() bool
+}
+
+// KeepsPrivileges reports whether fw asks to stay privileged.
+func KeepsPrivileges(fw Firewall) bool {
+	pk, ok := fw.(PrivilegeKeeper)
+	return ok && pk.KeepPrivileges()
+}
+
 // FirewallOptions carries process level information to firewall
 // factories.
 type FirewallOptions struct {
