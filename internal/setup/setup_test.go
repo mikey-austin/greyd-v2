@@ -414,8 +414,8 @@ func TestOpenHTTPRunsCurl(t *testing.T) {
 		proxy string
 		want  string
 	}{
-		{name: "no proxy", want: "-s\nhttp://www.example.org/list.gz\n"},
-		{name: "proxy", proxy: "p:1", want: "-s\n--proxy\np:1\nhttp://www.example.org/list.gz\n"},
+		{name: "no proxy", want: "-sS\n--fail\n--proto\n=http\n--max-time\n300\n--max-filesize\n268435456\nhttp://www.example.org/list.gz\n"},
+		{name: "proxy", proxy: "p:1", want: "-sS\n--fail\n--proto\n=http\n--max-time\n300\n--max-filesize\n268435456\n--proxy\np:1\nhttp://www.example.org/list.gz\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			extra := ""

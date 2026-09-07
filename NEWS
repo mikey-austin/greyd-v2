@@ -1,3 +1,18 @@
+2026-09-07
+	Security hardening from an audit. Sync verification now fails closed:
+	with verify = 1 a missing or empty key is a startup error instead of
+	falling back to the public all-zero HMAC key. SMTP connection limits are
+	enforced atomically at accept time, closing a check-then-act race that a
+	connection burst could use to oversubscribe max_cons and max_cons_per_
+	source; with the PROXY protocol the per-source slot follows the real
+	client rather than the proxy. Blacklist downloads support https and ftps,
+	the shipped feeds use https, and curl is restricted to the requested
+	scheme with time and size limits. Pidfiles are opened with O_NOFOLLOW and
+	rejected unless a single-link regular file, and the Docker image keeps
+	its pidfiles in a root-owned /run/greyd rather than world-writable /tmp.
+	The loopback TCP control port now warns that config_socket (peer-
+	credential checked) should be preferred.
+
 2026-09-06
         Hardening and clean-up of the Go code base. New greyd.conf options,
         all backwards compatible: config_socket (a unix domain socket for

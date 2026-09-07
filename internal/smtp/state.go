@@ -319,6 +319,10 @@ func (c *Conn) applyProxyHeader() bool {
 	switch {
 	case err == nil:
 		c.counters.proxyHeaders.Add(1)
+		if !local {
+			c.counters.reassignSource(c.reservedSrc, src.Unmap())
+			c.reservedSrc = src.Unmap()
+		}
 		if local {
 			// A LOCAL command (e.g. a health check): the connection's
 			// own addresses stand.
@@ -348,6 +352,7 @@ func (c *Conn) rematchAfterProxy() {
 		c.counters.mu.Lock()
 		if c.black {
 			c.counters.BlackClients++
+			c.counters.acceptedBlack.Add(1)
 		} else {
 			c.counters.BlackClients--
 		}

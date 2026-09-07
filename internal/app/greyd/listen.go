@@ -166,6 +166,11 @@ func (d *daemon) bindConfig(lc net.ListenConfig) (net.Listener, error) {
 		d.cfgUnix = true
 		return ln, nil
 	}
+	// The loopback control port trusts any caller connecting from a
+	// reserved (< 1024) source port, which is weak: on systems that let
+	// unprivileged processes bind low ports it is no authentication at
+	// all. Prefer config_socket, whose peer credentials are checked.
+	d.log.Warn("configuration on the loopback TCP port authenticates callers only by a reserved source port; set config_socket for a credential-checked unix socket", "config_port", d.s.ConfigPort)
 	ln, err := lc.Listen(context.Background(), "tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(d.s.ConfigPort)))
 	if err != nil {
 		return nil, fmt.Errorf("bind local: %w", err)

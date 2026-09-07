@@ -16,9 +16,27 @@ import (
 	"github.com/mikey-austin/greyd-v2/internal/settings"
 )
 
-// syncCfg returns sync settings with the documented defaults applied.
+// testKeyPath is a real key file shared by the tests; verification is on
+// by default, and New refuses a missing key, so the suite needs one.
+var testKeyPath string
+
+func TestMain(m *testing.M) {
+	f, err := os.CreateTemp("", "greyd-sync-key-*")
+	if err != nil {
+		panic(err)
+	}
+	_, _ = f.WriteString("integration-test-sync-key\n")
+	_ = f.Close()
+	testKeyPath = f.Name()
+	code := m.Run()
+	_ = os.Remove(testKeyPath)
+	os.Exit(code)
+}
+
+// syncCfg returns sync settings with the documented defaults applied and a
+// real key file so verification is satisfied.
 func syncCfg() settings.Sync {
-	return settings.Sync{Enable: true, Port: DefaultPort, TTL: DefaultTTL, Verify: true, Key: DefaultKey, McastAddress: MulticastAddr, ReplayWindow: 64}
+	return settings.Sync{Enable: true, Port: DefaultPort, TTL: DefaultTTL, Verify: true, Key: testKeyPath, McastAddress: MulticastAddr, ReplayWindow: 64}
 }
 
 func TestGreyRoundTrip(t *testing.T) {
@@ -401,4 +419,23 @@ func freePort(t *testing.T) int {
 	port := c.LocalAddr().(*net.UDPAddr).Port
 	_ = c.Close()
 	return port
+}
+
+// TestMissingKeyFailsClosed: verify=1 with a missing key is a startup
+// error, not a silent fall-through to the public zero key.
+func TestMissingKeyFailsClosed(t *testing.T) {
+	cfg := syncCfg()
+	cfg.Key = filepath.Join(t.TempDir(), "does-not-exist.key")
+	if _, err := New(cfg, true, nil); err == nil {
+		t.Fatal("New accepted verify=1 with a missing key")
+	}
+	// verify=0 is the explicit opt-out and must still work.
+	cfg.Verify = false
+	e, err := New(cfg, true, nil)
+	if err != nil || e == nil {
+		t.Fatalf("verify=0 with a missing key: %v", err)
+	}
+	if e.Keyed() {
+		t.Fatal("engine reported keyed with verify=0 and no key")
+	}
 }

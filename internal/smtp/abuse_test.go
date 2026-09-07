@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,7 +25,7 @@ import (
 func abuseConn(t *testing.T, h *harness, src string) (net.Conn, *Conn, <-chan struct{}) {
 	t.Helper()
 	client, server := net.Pipe()
-	c := NewConn(server, netip.MustParseAddrPort(src), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c := reserveConn(server, netip.MustParseAddrPort(src), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 	done := make(chan struct{})
 	go func() { c.Serve(); close(done) }()
 	t.Cleanup(func() { _ = client.Close() })
@@ -269,7 +270,7 @@ func TestAbuseBlacklistedClientStuttersByteByByte(t *testing.T) {
 	run := func(src string, dialogue func(br *lineReader, w io.Writer)) (*recordingConn, *Conn) {
 		client, server := net.Pipe()
 		rc := &recordingConn{Conn: server}
-		c := NewConn(rc, netip.MustParseAddrPort(src), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+		c := reserveConn(rc, netip.MustParseAddrPort(src), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 		done := make(chan struct{})
 		go func() { c.Serve(); close(done) }()
 		dialogue(newLineReader(client), client)
@@ -352,5 +353,64 @@ func TestAbuseOverlongV1ProxyHeaderRefused(t *testing.T) {
 	}
 	if n := h.counters.Totals().ProxyHeaders; n != 0 {
 		t.Fatalf("overlong header counted as accepted: %d", n)
+	}
+}
+
+// TestReserveConcurrent checks that concurrent reservations never exceed
+// the global or per-source limits (the check and the increment are
+// atomic), the counters end balanced, and refusals are counted.
+func TestReserveConcurrent(t *testing.T) {
+	t.Parallel()
+	c := NewCounters(50, 50)
+	c.MaxConsPerSource = 3
+	var wg sync.WaitGroup
+	var granted, refused int64
+	// Two source addresses, 400 racing attempts.
+	for i := 0; i < 400; i++ {
+		wg.Add(1)
+		src := netip.AddrFrom4([4]byte{10, 0, 0, byte(i % 2)})
+		go func() {
+			defer wg.Done()
+			if c.reserve(src) {
+				atomic.AddInt64(&granted, 1)
+			} else {
+				atomic.AddInt64(&refused, 1)
+			}
+		}()
+	}
+	wg.Wait()
+	clients, _, maxCons, _ := c.Snapshot()
+	// Per-source cap 3 over two sources bounds grants at 6, well under 50.
+	if granted != 6 {
+		t.Fatalf("granted %d, want 6 (2 sources x cap 3)", granted)
+	}
+	if clients != int(granted) || clients > maxCons {
+		t.Fatalf("clients %d, granted %d, maxCons %d", clients, granted, maxCons)
+	}
+	if granted+refused != 400 {
+		t.Fatalf("granted %d + refused %d != 400", granted, refused)
+	}
+	if got := c.Totals().RefusedSource; got != refused {
+		t.Fatalf("refused_source %d, want %d", got, refused)
+	}
+	// A global-limit race: 200 attempts from distinct sources, cap 50.
+	c2 := NewCounters(50, 50)
+	var g2 int64
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		src := netip.AddrFrom4([4]byte{10, 1, byte(i / 256), byte(i)})
+		go func() {
+			defer wg.Done()
+			if c2.reserve(src) {
+				atomic.AddInt64(&g2, 1)
+			}
+		}()
+	}
+	wg.Wait()
+	if g2 != 50 {
+		t.Fatalf("global cap: granted %d, want 50", g2)
+	}
+	if cl, _, _, _ := c2.Snapshot(); cl != 50 {
+		t.Fatalf("clients %d, want 50", cl)
 	}
 }

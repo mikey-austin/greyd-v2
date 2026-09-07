@@ -64,8 +64,8 @@ error_code = "450"
 
 chroot     = 1
 drop_privs = 1
-greyd_pidfile = "/tmp/greyd.pid"
-greylogd_pidfile = "/tmp/greylogd.pid"
+greyd_pidfile = "/run/greyd/greyd.pid"
+greylogd_pidfile = "/run/greyd/greylogd.pid"
 
 #
 # Use setrlimit to set various self-imposed limits

@@ -41,9 +41,29 @@ type Pidfile struct {
 // fcntl write lock, writes the pid and chowns the file to owner (when
 // non-nil). It ports write_pidfile.
 func WritePidfile(path string, owner *user.User) (*Pidfile, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644) //nolint:gosec // pidfiles are read by other users
+	// O_NOFOLLOW refuses to open through a symlink at the final path
+	// component, so a hostile symlink planted in a shared directory cannot
+	// redirect the truncate-and-chown that follows onto another file.
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|unix.O_NOFOLLOW, 0o644) //nolint:gosec // pidfiles are read by other users
 	if err != nil {
 		return nil, err
+	}
+
+	// Confirm the opened file is a plain, single-link regular file: not a
+	// symlink (O_NOFOLLOW only guards the last component), a hard link to a
+	// file we should not touch, or a device/fifo.
+	var st unix.Stat_t
+	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG {
+		_ = f.Close()
+		return nil, fmt.Errorf("pidfile %s is not a regular file", path)
+	}
+	if st.Nlink != 1 {
+		_ = f.Close()
+		return nil, fmt.Errorf("pidfile %s has %d hard links; refusing to use it", path, st.Nlink)
 	}
 
 	lock := unix.Flock_t{Type: unix.F_WRLCK, Whence: 0, Start: 0, Len: 0}

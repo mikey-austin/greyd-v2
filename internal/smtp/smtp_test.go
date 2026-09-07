@@ -110,7 +110,7 @@ func (r *rwBuf) Write(p []byte) (int, error) { return r.out.Write(p) }
 func TestConnInitAndClose(t *testing.T) {
 	h := newHarness(t, 4, 4)
 	rw := &rwBuf{in: &bytes.Buffer{}, out: &bytes.Buffer{}}
-	c := NewConn(rw, netip.MustParseAddrPort("10.10.10.1:1234"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c := reserveConn(rw, netip.MustParseAddrPort("10.10.10.1:1234"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 
 	if c.State != StateBannerOut || c.LastState != StateBannerIn {
 		t.Fatalf("states %d/%d", c.State, c.LastState)
@@ -145,7 +145,7 @@ func TestConnInitAndClose(t *testing.T) {
 func TestSummaryTruncationAndReply(t *testing.T) {
 	h := newHarness(t, 4, 4)
 	rw := &rwBuf{in: &bytes.Buffer{}, out: &bytes.Buffer{}}
-	c := NewConn(rw, netip.MustParseAddrPort("[2001::fad3:1]:1234"), netip.MustParseAddrPort("[::1]:8025"), h.cfg, h.deps, h.counters)
+	c := reserveConn(rw, netip.MustParseAddrPort("[2001::fad3:1]:1234"), netip.MustParseAddrPort("[::1]:8025"), h.cfg, h.deps, h.counters)
 	if len(c.Lists) != 2 || c.SrcAddr != "2001::fad3:1" {
 		t.Fatalf("lists %d src %q", len(c.Lists), c.SrcAddr)
 	}
@@ -196,7 +196,7 @@ func TestSummaryTruncationAndReply(t *testing.T) {
 func TestGreylistedReplyIsAlways451(t *testing.T) {
 	h := newHarness(t, 100, 100)
 	rw := &rwBuf{in: &bytes.Buffer{}, out: &bytes.Buffer{}}
-	c := NewConn(rw, netip.MustParseAddrPort("[fa40::fad3:1]:1234"), netip.MustParseAddrPort("[::1]:8025"), h.cfg, h.deps, h.counters)
+	c := reserveConn(rw, netip.MustParseAddrPort("[fa40::fad3:1]:1234"), netip.MustParseAddrPort("[::1]:8025"), h.cfg, h.deps, h.counters)
 	if len(c.Lists) != 0 || c.IsBlacklisted() {
 		t.Fatal("should not be blacklisted")
 	}
@@ -215,7 +215,7 @@ func TestDialogueGreylisted(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
 
-	c := NewConn(server, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c := reserveConn(server, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 	done := make(chan struct{})
 	go func() { c.Serve(); close(done) }()
 
@@ -257,7 +257,7 @@ func TestDialogueBlacklistedFullMessage(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
 
-	c := NewConn(server, netip.MustParseAddrPort("10.10.10.1:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c := reserveConn(server, netip.MustParseAddrPort("10.10.10.1:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 	done := make(chan struct{})
 	go func() { c.Serve(); close(done) }()
 
@@ -289,7 +289,7 @@ func TestQuitAndRset(t *testing.T) {
 	h.cfg.Stutter = 0
 	client, server := net.Pipe()
 	defer client.Close()
-	c := NewConn(server, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c := reserveConn(server, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 	done := make(chan struct{})
 	go func() { c.Serve(); close(done) }()
 	br := newLineReader(client)
@@ -315,7 +315,7 @@ func TestTooManyBadCommands(t *testing.T) {
 	h.cfg.Stutter = 0
 	client, server := net.Pipe()
 	defer client.Close()
-	c := NewConn(server, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c := reserveConn(server, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 	done := make(chan struct{})
 	go func() { c.Serve(); close(done) }()
 	br := newLineReader(client)
@@ -337,7 +337,7 @@ func TestEmptyHelo(t *testing.T) {
 	h.cfg.Stutter = 0
 	client, server := net.Pipe()
 	defer client.Close()
-	c := NewConn(server, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c := reserveConn(server, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 	go c.Serve()
 	br := newLineReader(client)
 	expect(t, br, "220 ")
@@ -356,7 +356,7 @@ func TestClientDisconnectMidDialogue(t *testing.T) {
 	h := newHarness(t, 100, 100)
 	h.cfg.Stutter = 0
 	client, server := net.Pipe()
-	c := NewConn(server, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c := reserveConn(server, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 	done := make(chan struct{})
 	go func() { c.Serve(); close(done) }()
 	br := newLineReader(client)
@@ -375,7 +375,7 @@ func TestClientDisconnectMidDialogue(t *testing.T) {
 func TestGreyStutterCutoff(t *testing.T) {
 	h := newHarness(t, 100, 100)
 	rw := &rwBuf{in: &bytes.Buffer{}, out: &bytes.Buffer{}}
-	c := NewConn(rw, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c := reserveConn(rw, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 	if c.Stutter != 1 {
 		t.Fatalf("initial stutter %d", c.Stutter)
 	}
@@ -392,7 +392,7 @@ func TestGreyStutterCutoff(t *testing.T) {
 
 	// With grey.stutter = 0 greylisted connections never stutter.
 	h.cfg.GreyStutter = 0
-	c = NewConn(rw, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c = reserveConn(rw, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 	if c.Stutter != 0 {
 		t.Fatal("grey stutter 0 should disable stuttering")
 	}
@@ -401,7 +401,7 @@ func TestGreyStutterCutoff(t *testing.T) {
 	// Blacklisted connections abandon stuttering beyond max_black.
 	h.cfg.GreyStutter = 15
 	h.counters.MaxBlack = 0
-	c = NewConn(rw, netip.MustParseAddrPort("10.10.10.1:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c = reserveConn(rw, netip.MustParseAddrPort("10.10.10.1:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 	if c.Stutter != 0 {
 		t.Fatal("too many black clients should abandon stutter")
 	}
@@ -444,7 +444,7 @@ func TestProxyProtocolDialogue(t *testing.T) {
 
 	// Permitted proxy: the real client (blacklisted 10.10.10.1) is used.
 	client, server := net.Pipe()
-	c := NewConn(server, netip.MustParseAddrPort("127.0.0.1:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c := reserveConn(server, netip.MustParseAddrPort("127.0.0.1:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 	if c.State != StateProxyOut {
 		t.Fatalf("initial proxy state %d", c.State)
 	}
@@ -472,7 +472,7 @@ func TestProxyProtocolDialogue(t *testing.T) {
 
 	// Non-permitted proxy: rejected with the error reply.
 	client, server = net.Pipe()
-	c = NewConn(server, netip.MustParseAddrPort("192.0.2.1:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c = reserveConn(server, netip.MustParseAddrPort("192.0.2.1:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 	done = make(chan struct{})
 	go func() { c.Serve(); close(done) }()
 	br = newLineReader(client)
@@ -483,7 +483,7 @@ func TestProxyProtocolDialogue(t *testing.T) {
 
 	// UNKNOWN header: rejected.
 	client, server = net.Pipe()
-	c = NewConn(server, netip.MustParseAddrPort("127.0.0.1:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c = reserveConn(server, netip.MustParseAddrPort("127.0.0.1:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 	done = make(chan struct{})
 	go func() { c.Serve(); close(done) }()
 	br = newLineReader(client)
@@ -495,7 +495,7 @@ func TestProxyProtocolDialogue(t *testing.T) {
 	// Proxied greylisted client: dst_ip comes from the header, not the
 	// firewall lookup.
 	client, server = net.Pipe()
-	c = NewConn(server, netip.MustParseAddrPort("127.0.0.1:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c = reserveConn(server, netip.MustParseAddrPort("127.0.0.1:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 	done = make(chan struct{})
 	go func() { c.Serve(); close(done) }()
 	br = newLineReader(client)
@@ -599,7 +599,7 @@ func TestProxyProtocolV2Dialogue(t *testing.T) {
 
 	// Permitted proxy: the real client (blacklisted 10.10.10.1) is used.
 	client, server := net.Pipe()
-	c := NewConn(server, proxy, local, h.cfg, h.deps, h.counters)
+	c := reserveConn(server, proxy, local, h.cfg, h.deps, h.counters)
 	done := make(chan struct{})
 	go func() { c.Serve(); close(done) }()
 	br := newLineReader(client)
@@ -625,7 +625,7 @@ func TestProxyProtocolV2Dialogue(t *testing.T) {
 
 	// IPv6 addresses with TLVs, and the header split across writes.
 	client, server = net.Pipe()
-	c = NewConn(server, proxy, local, h.cfg, h.deps, h.counters)
+	c = reserveConn(server, proxy, local, h.cfg, h.deps, h.counters)
 	done = make(chan struct{})
 	go func() { c.Serve(); close(done) }()
 	br = newLineReader(client)
@@ -653,7 +653,7 @@ func TestProxyProtocolV2Dialogue(t *testing.T) {
 	// with it). The write is asynchronous as the pipe is unbuffered and the
 	// banner goes out before the command is consumed.
 	client, server = net.Pipe()
-	c = NewConn(server, proxy, local, h.cfg, h.deps, h.counters)
+	c = reserveConn(server, proxy, local, h.cfg, h.deps, h.counters)
 	done = make(chan struct{})
 	go func() { c.Serve(); close(done) }()
 	br = newLineReader(client)
@@ -677,7 +677,7 @@ func TestProxyProtocolV2Dialogue(t *testing.T) {
 
 	// Non-permitted proxy: rejected with the error reply.
 	client, server = net.Pipe()
-	c = NewConn(server, netip.MustParseAddrPort("192.0.2.1:5555"), local, h.cfg, h.deps, h.counters)
+	c = reserveConn(server, netip.MustParseAddrPort("192.0.2.1:5555"), local, h.cfg, h.deps, h.counters)
 	done = make(chan struct{})
 	go func() { c.Serve(); close(done) }()
 	br = newLineReader(client)
@@ -692,7 +692,7 @@ func TestProxyProtocolV2Dialogue(t *testing.T) {
 		proxyV2(0x01, 0x11, proxyV2Addrs("10.10.10.9", "10.0.0.25", 4000, 25)[:8]),
 	} {
 		client, server = net.Pipe()
-		c = NewConn(server, proxy, local, h.cfg, h.deps, h.counters)
+		c = reserveConn(server, proxy, local, h.cfg, h.deps, h.counters)
 		done = make(chan struct{})
 		go func() { c.Serve(); close(done) }()
 		br = newLineReader(client)
@@ -704,7 +704,7 @@ func TestProxyProtocolV2Dialogue(t *testing.T) {
 
 	// An oversized length is refused before the block is read.
 	client, server = net.Pipe()
-	c = NewConn(server, proxy, local, h.cfg, h.deps, h.counters)
+	c = reserveConn(server, proxy, local, h.cfg, h.deps, h.counters)
 	done = make(chan struct{})
 	go func() { c.Serve(); close(done) }()
 	hdr = append(append([]byte(nil), ProxyV2Signature...), 0x21, 0x11, 0xff, 0xff)
@@ -717,7 +717,7 @@ func TestProxyProtocolV2Dialogue(t *testing.T) {
 
 	// Proxied greylisted client: dst_ip comes from the header.
 	client, server = net.Pipe()
-	c = NewConn(server, proxy, local, h.cfg, h.deps, h.counters)
+	c = reserveConn(server, proxy, local, h.cfg, h.deps, h.counters)
 	done = make(chan struct{})
 	go func() { c.Serve(); close(done) }()
 	br = newLineReader(client)
@@ -826,7 +826,7 @@ func TestLineLengthLimit(t *testing.T) {
 	h.cfg.MaxLineLength = 64
 	client, server := net.Pipe()
 	defer client.Close()
-	c := NewConn(server, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
+	c := reserveConn(server, netip.MustParseAddrPort("10.10.10.9:5555"), netip.MustParseAddrPort("127.0.0.1:8025"), h.cfg, h.deps, h.counters)
 	go c.Serve()
 	br := newLineReader(client)
 	expect(t, br, "220 ")
@@ -942,4 +942,12 @@ func send(t *testing.T, w io.Writer, s string) {
 	if _, err := io.WriteString(w, s); err != nil {
 		t.Fatalf("send %q: %v", s, err)
 	}
+}
+
+// reserveConn mirrors what the server does: reserve the per-source slot at
+// accept time, then build the connection. The unit tests call it in place
+// of NewConn (which no longer self-registers).
+func reserveConn(rw io.ReadWriter, src, local netip.AddrPort, cfg Config, deps Deps, counters *Counters) *Conn {
+	counters.reserve(src.Addr().Unmap())
+	return NewConn(rw, src, local, cfg, deps, counters)
 }

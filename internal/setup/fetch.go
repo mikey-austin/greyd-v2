@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/mikey-austin/greyd-v2/internal/config"
@@ -32,13 +33,20 @@ import (
 
 // Fetch methods understood in a list's "method" variable.
 const (
-	MethodFile = "file"
-	MethodHTTP = "http"
-	MethodFTP  = "ftp"
-	MethodExec = "exec"
+	MethodFile  = "file"
+	MethodHTTP  = "http"
+	MethodHTTPS = "https"
+	MethodFTP   = "ftp"
+	MethodFTPS  = "ftps"
+	MethodExec  = "exec"
 
 	// DefaultCurl is used when setup.curl_path is not configured.
 	DefaultCurl = "/bin/curl"
+
+	// maxListBytes bounds a downloaded list so a hostile or broken mirror
+	// cannot exhaust memory or disk (curl --max-filesize). Compressed
+	// lists are well under this.
+	maxListBytes = 256 << 20
 )
 
 // Open returns the (decompressed, if gzip) contents of the list described
@@ -59,12 +67,20 @@ func Open(ctx context.Context, section *config.Section, cfg settings.Setup) (io.
 	switch method {
 	case "", MethodFile:
 		rc, err = os.Open(file)
-	case MethodHTTP, MethodFTP:
+	case MethodHTTP, MethodHTTPS, MethodFTP, MethodFTPS:
 		curl := cfg.CurlPath
 		if curl == "" {
 			curl = DefaultCurl
 		}
-		args := []string{"-s"}
+		// Fail on HTTP errors, bound the time and size, and restrict curl
+		// to the requested scheme so a redirect cannot downgrade to a
+		// different protocol (redirects are not followed at all: no -L).
+		args := []string{
+			"-sS", "--fail",
+			"--proto", "=" + method,
+			"--max-time", "300",
+			"--max-filesize", strconv.Itoa(maxListBytes),
+		}
 		if proxy := cfg.CurlProxy; proxy != "" {
 			args = append(args, "--proxy", proxy)
 		}

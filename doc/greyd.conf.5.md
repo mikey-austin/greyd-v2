@@ -454,7 +454,7 @@ A blacklist must contain the following fields:
   The message to be sent to **greyd**(8). This message will be displayed to clients who are on this list.
 
 * **method** = *string*:
-  The method in which the list of addresses is fetched. This may be one of *http*, *ftp*, *exec* or *file*.
+  The method in which the list of addresses is fetched. This may be one of *https*, *http*, *ftps*, *ftp*, *exec* or *file*. Prefer *https* (or *ftps*): the fetched list is trusted and loaded verbatim into the live blacklist, so a plaintext transport lets a network attacker or a compromised mirror inject arbitrary addresses. Downloads are restricted to the named scheme (redirects are not followed), time limited and size limited.
 
 * **file** = *string*:
   The argument to the specified *method*. For example, if the *http* method is specified, the *file* refers to the URL (minus the protocol).
@@ -463,7 +463,7 @@ An example blacklist definition is as follows:
 
     blacklist nixspam {
         message = "Your address %A is in the nixspam list"
-        method  = "http"
+        method  = "https"
         file = "www.openbsd.org/spamd/nixspam.gz"
     }
 

@@ -44,6 +44,7 @@ type Server struct {
 
 // NewServer creates a server.
 func NewServer(cfg Config, deps Deps, counters *Counters) *Server {
+	counters.MaxConsPerSource = cfg.MaxConsPerSource
 	return &Server{cfg: cfg, deps: deps, counters: counters, conns: make(map[*Conn]struct{}), log: logger.Or(deps.Log)}
 }
 
@@ -75,19 +76,15 @@ func (s *Server) ServeListener(ctx context.Context, l net.Listener) error {
 			return err
 		}
 
-		if s.counters.Full() {
-			s.counters.CountRefused(false)
+		// Claim the slot atomically at accept time; the check and the
+		// increment must not race a burst of concurrent connections.
+		src := addrPortOf(conn.RemoteAddr()).Addr().Unmap()
+		if !s.counters.reserve(src) {
+			if s.cfg.MaxConsPerSource > 0 && s.counters.SourceCount(src) >= s.cfg.MaxConsPerSource {
+				s.log.Warn("too many connections from source; dropping", "client", src, "limit", s.cfg.MaxConsPerSource)
+			}
 			_ = conn.Close()
 			continue
-		}
-		if s.cfg.MaxConsPerSource > 0 {
-			src := addrPortOf(conn.RemoteAddr()).Addr().Unmap()
-			if s.counters.SourceCount(src) >= s.cfg.MaxConsPerSource {
-				s.log.Warn("too many connections from source; dropping", "client", src, "limit", s.cfg.MaxConsPerSource)
-				s.counters.CountRefused(true)
-				_ = conn.Close()
-				continue
-			}
 		}
 		s.wg.Add(1)
 		go func() {

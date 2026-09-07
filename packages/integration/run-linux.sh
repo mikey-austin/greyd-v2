@@ -201,19 +201,27 @@ restart_persistence() {
     [ "$bcount2" -gt "$bcount" ] || die "bcount did not grow across the restart ($bcount -> $bcount2)"
     [ "$pass2" -lt "$expire2" ] || die "retry after pass_time did not mark the tuple for whitelisting (pass=$pass2 expire=$expire2)"
 
-    # The greylister's periodic scan re-keys the passed tuple as a WHITE
-    # address entry. Poll while greyd runs (greydb reads retry on a busy
-    # database) rather than assume the first scan finished within a fixed
-    # sleep.
-    start_greyd "$conf"
-    white_present() { run_greydb_conf "$conf" 2>/dev/null | grep -q "^WHITE|$RESTART_SRC|"; }
-    WAIT=$((RESTART_PASS_TIME + 20)) wait_for "WHITE|$RESTART_SRC from the scan" white_present         || die "WHITE|$RESTART_SRC not created by the scan after the restart"
-    if run_greydb_conf "$conf" 2>/dev/null | grep -q -- "$key"; then
+    # The greylister's start-up scan re-keys the passed tuple as a WHITE
+    # address entry. bolt is a single-opener database, so greydb cannot
+    # read it while greyd holds it: run greyd long enough for the
+    # start-up scan, stop it, then check with greydb; retry to absorb a
+    # slow scan.
+    local found=0 attempt
+    for attempt in 1 2 3; do
+        start_greyd "$conf"
+        sleep 5
         stop_greyd
+        [ "$GREYD_RC" -eq 0 ] || die "greyd exited with status $GREYD_RC on the third SIGTERM"
+        if run_greydb_conf "$conf" 2>/dev/null | grep -q "^WHITE|$RESTART_SRC|"; then
+            found=1
+            break
+        fi
+        say "scan $attempt: WHITE|$RESTART_SRC not present yet"
+    done
+    [ "$found" = 1 ] || die "WHITE|$RESTART_SRC not created by the scan after the restart"
+    if run_greydb_conf "$conf" 2>/dev/null | grep -q -- "$key"; then
         die "GREY tuple still present after being whitelisted"
     fi
-    stop_greyd
-    [ "$GREYD_RC" -eq 0 ] || die "greyd exited with status $GREYD_RC on the third SIGTERM"
 }
 
 # --- 1. environment ----------------------------------------------------------

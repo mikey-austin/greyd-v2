@@ -86,6 +86,13 @@ func New(cfg settings.Sync, greyEnabled bool, log *slog.Logger) (*Engine, error)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read sync key: %w", err)
 		}
+		if !ok {
+			// Fail closed: with verification enabled a missing or empty
+			// key would otherwise become the public all-zero HMAC key,
+			// letting anyone inject entries. Require a real key, or
+			// opt out explicitly with verify = 0.
+			return nil, fmt.Errorf("sync verification is enabled but no key was loaded from %q; provide a key file or set verify = 0 to allow unauthenticated sync", cfg.Key)
+		}
 		e.key = k
 		e.keyed = ok
 	}
@@ -132,7 +139,9 @@ func (e *Engine) Start() error {
 		e.sendMcast = true
 	}
 	if !e.keyed {
-		e.log.Warn("no sync key loaded; synchronisation messages are not authenticated", "key", e.cfg.Key)
+		// Reached only with verify = 0 (New refuses a missing key when
+		// verification is on).
+		e.log.Warn("sync verification is disabled (verify = 0); messages are not authenticated", "key", e.cfg.Key)
 	}
 
 	bindIP := net.IPv4zero

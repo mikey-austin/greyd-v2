@@ -14,12 +14,12 @@ COPY . /src
 # be passed to both the build and the install.
 RUN make build \
         DEFAULT_CONFIG=/usr/local/etc/greyd/greyd.docker.conf \
-        GREYD_PIDFILE=/tmp/greyd.pid \
-        GREYLOGD_PIDFILE=/tmp/greylogd.pid \
+        GREYD_PIDFILE=/run/greyd/greyd.pid \
+        GREYLOGD_PIDFILE=/run/greyd/greylogd.pid \
     && make install DESTDIR=/out \
         DEFAULT_CONFIG=/usr/local/etc/greyd/greyd.docker.conf \
-        GREYD_PIDFILE=/tmp/greyd.pid \
-        GREYLOGD_PIDFILE=/tmp/greylogd.pid
+        GREYD_PIDFILE=/run/greyd/greyd.pid \
+        GREYLOGD_PIDFILE=/run/greyd/greylogd.pid
 
 #
 # Runtime image.
@@ -32,6 +32,9 @@ COPY --from=build /out/usr/local /usr/local
 
 EXPOSE 8025/tcp
 
+# Root-owned runtime directory for the pidfiles (greyd writes them as root
+# before dropping privileges); /tmp is world-writable and unsafe for them.
+RUN mkdir -p /run/greyd && chmod 0755 /run/greyd
 RUN ln -sf /dev/stdout /tmp/greyd.log
 RUN addgroup -S greyd
 RUN addgroup -S greydb

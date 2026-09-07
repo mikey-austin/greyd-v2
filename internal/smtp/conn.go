@@ -154,12 +154,13 @@ func (d *Deps) sleep(t time.Duration) {
 
 // Counters tracks the connection totals shared by all connections.
 type Counters struct {
-	mu           sync.Mutex
-	Clients      int
-	BlackClients int
-	MaxCons      int
-	MaxBlack     int
-	perSource    map[netip.Addr]int
+	mu               sync.Mutex
+	Clients          int
+	BlackClients     int
+	MaxCons          int
+	MaxBlack         int
+	MaxConsPerSource int
+	perSource        map[netip.Addr]int
 
 	// Cumulative totals since start (see Totals).
 	accepted, acceptedBlack, refusedFull, refusedSource atomic.Int64
@@ -206,19 +207,58 @@ func NewCounters(maxCons, maxBlack int) *Counters {
 	return &Counters{MaxCons: maxCons, MaxBlack: maxBlack, perSource: make(map[netip.Addr]int)}
 }
 
-func (c *Counters) add(src netip.Addr, black bool) (clients, blackClients int) {
+// reserve atomically claims a connection slot for src under the global and
+// per-source limits, so the check and the count cannot race a burst of
+// concurrent accepts. A refused connection is counted. The slot is
+// released by remove when the connection closes.
+func (c *Counters) reserve(src netip.Addr) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.MaxCons > 0 && c.Clients >= c.MaxCons {
+		c.refusedFull.Add(1)
+		return false
+	}
+	if c.MaxConsPerSource > 0 && src.IsValid() && c.perSource[src] >= c.MaxConsPerSource {
+		c.refusedSource.Add(1)
+		return false
+	}
 	c.Clients++
 	c.accepted.Add(1)
-	if black {
-		c.BlackClients++
-		c.acceptedBlack.Add(1)
-	}
 	if src.IsValid() {
 		c.perSource[src]++
 	}
-	return c.Clients, c.BlackClients
+	return true
+}
+
+// markBlack records that the reserved connection matched a blacklist and
+// returns the current blacklisted count.
+func (c *Counters) markBlack() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.BlackClients++
+	c.acceptedBlack.Add(1)
+	return c.BlackClients
+}
+
+// reassignSource moves a live per-source reservation from old to new,
+// used after the PROXY protocol reveals the real client behind a proxy so
+// the per-source cap applies to the client, not the proxy.
+func (c *Counters) reassignSource(old, new netip.Addr) {
+	if old == new {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if old.IsValid() {
+		if c.perSource[old] <= 1 {
+			delete(c.perSource, old)
+		} else {
+			c.perSource[old]--
+		}
+	}
+	if new.IsValid() {
+		c.perSource[new]++
+	}
 }
 
 func (c *Counters) remove(src netip.Addr, black bool) {
@@ -277,13 +317,16 @@ type Conn struct {
 	State     int
 	LastState int
 
-	Src     netip.AddrPort
-	Local   netip.AddrPort
-	SrcAddr string
-	DstAddr string
-	Helo    string
-	Mail    string
-	Rcpt    string
+	Src netip.AddrPort
+	// reservedSrc is the address whose per-source slot this connection
+	// holds; the PROXY path moves it from the proxy to the real client.
+	reservedSrc netip.Addr
+	Local       netip.AddrPort
+	SrcAddr     string
+	DstAddr     string
+	Helo        string
+	Mail        string
+	Rcpt        string
 
 	Lists       []*blacklist.Blacklist
 	ListSummary string
@@ -322,10 +365,11 @@ func NewConn(rw io.ReadWriter, src, local netip.AddrPort, cfg Config, deps Deps,
 	c.SrcAddr = src.Addr().Unmap().String()
 	c.log = logger.Or(deps.Log).With("client", c.SrcAddr)
 	c.start = deps.now()
+	c.reservedSrc = src.Addr().Unmap()
 	c.matchBlacklists()
 
-	_, black := counters.add(src.Addr().Unmap(), c.black)
 	if c.black {
+		black := counters.markBlack()
 		c.ListSummary = SummarizeLists(c.Lists)
 		// Abandon stuttering if there are too many blacklisted connections.
 		if cfg.Greylist && black > counters.MaxBlack {
@@ -390,7 +434,7 @@ func (c *Conn) Close() {
 	} else {
 		c.log.Info("disconnected", "seconds", elapsed)
 	}
-	c.counters.remove(c.Src.Addr().Unmap(), c.black)
+	c.counters.remove(c.reservedSrc, c.black)
 	c.Lists = nil
 	c.ListSummary = ""
 	c.Out = nil
