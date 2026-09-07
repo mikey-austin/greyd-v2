@@ -16,6 +16,8 @@ jobs:
       run: make test
     - name: race
       run: make test-race
+    - name: fuzz (smoke)
+      run: make fuzz FUZZTIME=5s
     - name: cross-compile checks
       run: |
         GOOS=openbsd GOARCH=amd64 go vet -unreachable=false ./...

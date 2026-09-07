@@ -550,3 +550,21 @@ Edits: driver documentation in `greyd.conf.5.md` (`driver = "netfilter"` / `"pf"
 - [x] `make fmt lint test` clean; `make test-race`; `CGO_ENABLED=0 GOOS=linux go build ./...`; `GOOS=openbsd go vet ./...` and `GOOS=freebsd go vet ./...`; `docker build -f packages/docker/Dockerfile .` when docker is available; `make test-db-docker` when docker is available.
 - [x] Smoke run as an unprivileged user: `bin/greyd -F -f etc/greyd.test.conf` with `drop_privs = 0`, `chroot = 0`, `setrlimit = 0`, memory store, dummy firewall, `bind_address = 127.0.0.1`, `port = 18025`, `config_port = 18026`; `nc` an SMTP dialogue and check `bin/greydb -f etc/greyd.test.conf` output shows the GREY entry (use sqlite for this run so greydb sees the data).
 - [x] Update `README.md` status section with anything left unverified (pf, netfilter on real hosts). Commit `Finalize greyd Go port`.
+
+## Follow-up: clean-up and hardening pass (2026-09-07)
+
+Implemented after the port, in three commits on top of `Share one getopt implementation`:
+
+- [x] Typed settings schema (`internal/settings`), shared getopt (`internal/cli`), injected slog
+      logger, transactional `core.Store` and context-aware `core.Firewall`, typed IPC codec
+      without ANTLR, lifecycle split of the greyd main process.
+- [x] Security: unix configuration socket with peer credentials (`config_socket`), sync replay
+      window and zero-key warning, per-source connection cap, SMTP line length cap, configuration
+      frame / permitted domains / list entry caps, bounded PROXY header, per-process sandbox
+      (Landlock + seccomp + no_new_privs on Linux, pledge on OpenBSD), hardened systemd units,
+      patched toolchain pin.
+- [x] Quality: `greyd -t`, `--drivers`, `--version`; generic driver registry with descriptions;
+      fuzz targets (`make fuzz`), property tests (kv codec, Collapse, RangeToCIDRs, proxy header,
+      sync wire) and benchmarks; golangci-lint + govulncheck in `make lint` and CI, tree clean.
+- [x] Documentation: greyd.conf(5) and greyd(8) new options and switches, sample configuration,
+      README, NEWS, INSTALL (systemd, toolchain).

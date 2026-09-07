@@ -430,8 +430,14 @@ func (c *Conn) HandleRead() {
 		}
 	}
 
-	// Replace trailing new lines with nothing.
+	// The C implementation handled the buffer as a string, so anything
+	// after a NUL was invisible to it; do the same rather than carry NULs
+	// into database keys.
 	line := c.in
+	if i := bytes.IndexByte(line, 0); i >= 0 {
+		line = line[:i]
+	}
+	// Replace trailing new lines with nothing.
 	for len(line) > 0 && (line[len(line)-1] == '\r' || line[len(line)-1] == '\n') {
 		line = line[:len(line)-1]
 	}

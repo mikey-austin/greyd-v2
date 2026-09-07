@@ -3,7 +3,8 @@
 #
 # Common targets:
 #   make            build all programs into bin/
-#   make test       vet + unit tests (race detector enabled)
+#   make test       vet + unit tests (make test-race adds the race detector)
+#   make fuzz       run the fuzz targets for FUZZTIME (default 10s) each
 #   make lint       vet + golangci-lint + govulncheck (each skipped if absent)
 #   make tools      go install golangci-lint & govulncheck, fetch the ANTLR jar
 #   make generate   regenerate the ANTLR configuration parser
@@ -86,7 +87,7 @@ UNIT_FILES     := $(UNIT_DIR)/greyd.service $(UNIT_DIR)/greylogd.service \
 MAN8          := doc/greyd.8 doc/greylogd.8 doc/greydb.8 doc/greyd-setup.8
 MAN5           := doc/greyd.conf.5
 
-.PHONY: all build $(PROGRAMS) generate test test-race test-db-docker lint fmt vet man \
+.PHONY: all build $(PROGRAMS) generate test test-race test-db-docker fuzz lint fmt vet man \
         conf units install uninstall dist docker clean distclean tools
 
 all: build
@@ -137,6 +138,20 @@ lint: vet
 
 test: vet
 	$(GO) test ./...
+
+# Fuzz targets, run one at a time for FUZZTIME each (seed corpora also run
+# under plain "make test").
+FUZZTIME ?= 10s
+FUZZ_TARGETS := internal/config/parse:FuzzString internal/spamdlist:FuzzParseLimited \
+                internal/smtp:FuzzParseProxyHeader internal/smtp:FuzzExpandMessage \
+                internal/sync:FuzzDecode internal/ipc:FuzzDecode internal/ipc:FuzzReader \
+                adapters/db/kv:FuzzDecodeKey adapters/db/kv:FuzzDecodeData
+fuzz:
+	@set -e; for t in $(FUZZ_TARGETS); do \
+	    pkg=$${t%%:*}; fn=$${t##*:}; \
+	    echo "fuzz $$pkg $$fn ($(FUZZTIME))"; \
+	    $(GO) test -run '^$$' -fuzz "^$$fn$$" -fuzztime $(FUZZTIME) ./$$pkg/; \
+	done
 
 # The race detector needs cgo; everything else is built without it.
 test-race: vet
