@@ -27,15 +27,17 @@ import (
 )
 
 // apply pledges the process. The promises are deliberately generous:
-// the runtime needs stdio, every role talks over sockets, and the
-// greylister reads and writes database files and resolves names.
+// the runtime needs stdio, every role talks over sockets, the greylister
+// reads and writes database files and resolves names, and every role
+// needs flock because the shared log file is written under an fcntl
+// lock (a violation kills the process before it can report anything).
 func apply(p Profile, log *slog.Logger) error {
 	var promises []string
 	switch p.Role {
 	case RoleMain:
-		promises = []string{"stdio", "inet", "unix", "proc", "rpath", "cpath"}
+		promises = []string{"stdio", "flock", "inet", "unix", "proc", "rpath", "cpath"}
 	case RoleFirewall:
-		promises = []string{"stdio", "rpath", "wpath", "inet", "unix"}
+		promises = []string{"stdio", "flock", "rpath", "wpath", "inet", "unix"}
 		if p.Devices {
 			promises = append(promises, "pf")
 		}
