@@ -173,7 +173,7 @@ if [ ! -x "$BIN/greyd" ] || [ ! -x "$BIN/greydb" ] || [ ! -x "$BIN/greyd-setup" 
     say "building into $BIN"
     mkdir -p "$BIN"
     for p in greyd greydb greyd-setup greylogd; do
-        (cd "$SRC" && CGO_ENABLED=0 go build -trimpath -o "$BIN/$p" "./cmd/$p")
+        (cd "$SRC" && CGO_ENABLED=0 "${GREYD_GO:-go}" build -trimpath -o "$BIN/$p" "./cmd/$p")
     done
 fi
 "$BIN/greyd" --version

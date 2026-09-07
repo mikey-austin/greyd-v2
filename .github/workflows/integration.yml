@@ -161,14 +161,31 @@ jobs:
           sync: rsync
           copyback: false
           prepare: |
-            pkg install -y go
+            # dports ships several Go versions; take the newest that
+            # satisfies the go.mod floor. The default "go" package lags.
+            pkg install -y go125 || pkg install -y go124 || pkg install -y go || true
           run: |
             set -e
             export GOFLAGS=-buildvcs=false GOTOOLCHAIN=local
-            go version
+            # Prefer a versioned Go binary (go125/go124) over the default.
+            for c in go125 go124 go; do
+              if command -v "$c" >/dev/null 2>&1; then GO=$c; break; fi
+            done
+            want=$(sed -n 's/^go //p' go.mod)
+            have=$("$GO" version 2>/dev/null | sed -n 's/^go version go\([0-9.]*\).*/\1/p')
+            echo "go.mod needs >= go$want; dports $GO is '${have:-none}'"
+            # DragonFly is not published on go.dev, so if dports has no Go
+            # new enough this best-effort job cannot run the suite; say so
+            # and stop cleanly (the job is continue-on-error).
+            major_ok=$(awk -v h="${have:-0}" -v w="$want" 'BEGIN{split(h,a,".");split(w,b,".");print (a[1]>b[1] || (a[1]==b[1] && a[2]>=b[2])) ? 1 : 0}')
+            if [ "$major_ok" != 1 ]; then
+              echo "DragonFly dports has no Go >= $want yet; skipping the DragonFly suite."
+              exit 0
+            fi
+            "$GO" version
             echo "== go vet"
-            go vet -unreachable=false ./...
+            "$GO" vet -unreachable=false ./...
             echo "== go test"
-            go test ./...
+            "$GO" test ./...
             echo "== pf smoke test"
-            sh packages/integration/run-dragonfly.sh
+            GREYD_GO="$GO" sh packages/integration/run-dragonfly.sh

@@ -162,7 +162,7 @@ func (s *Store) Open(ctx context.Context, mode core.OpenMode) error {
 	}
 	// Temporary tables and sort spills stay in memory, so the process
 	// needs no scratch directory once sandboxed.
-	db, err := sql.Open("sqlite", "file:"+s.path+"?_pragma=temp_store(memory)")
+	db, err := sql.Open("sqlite", "file:"+s.path+"?_pragma=temp_store(memory)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return fmt.Errorf("could not open %s: %w", s.path, err)
 	}
