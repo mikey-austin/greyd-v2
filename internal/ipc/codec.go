@@ -77,12 +77,36 @@ type DstReply struct {
 	Dst string
 }
 
+// StatsRequest asks greyd for its counters (configuration socket).
+type StatsRequest struct{}
+
+// StatsReply answers a StatsRequest: integer counters by name plus the
+// loaded blacklists as "name=entries".
+type StatsReply struct {
+	Counters   map[string]int64
+	Blacklists []string
+}
+
+// ScanStats is sent by the greylister to the main process after each
+// database scan with the entry counts it found.
+type ScanStats struct {
+	At       int64
+	Grey     int64
+	White    int64
+	Trapped  int64
+	Spamtrap int64
+	Domain   int64
+}
+
 func (*GreyMessage) isMessage()      {}
 func (*AddrMessage) isMessage()      {}
 func (*BlacklistMessage) isMessage() {}
 func (*ReplaceRequest) isMessage()   {}
 func (*NATRequest) isMessage()       {}
 func (*DstReply) isMessage()         {}
+func (*StatsRequest) isMessage()     {}
+func (*StatsReply) isMessage()       {}
+func (*ScanStats) isMessage()        {}
 
 // ErrUnknownMessage is returned when a frame matches no message type.
 var ErrUnknownMessage = errors.New("unknown message")
@@ -215,6 +239,25 @@ func classify(f fields) (Message, error) {
 
 	if typ, ok := f.str("type"); ok {
 		switch typ {
+		case TypeStats:
+			return &StatsRequest{}, nil
+		case TypeStatsReply:
+			m := StatsReply{Counters: map[string]int64{}}
+			for name, v := range f {
+				if v.isInt && name != "type" {
+					m.Counters[name] = int64(v.n)
+				}
+			}
+			m.Blacklists, _ = f.strings("blacklists")
+			return &m, nil
+		case TypeScanStats:
+			var m ScanStats
+			for name, dst := range map[string]*int64{"at": &m.At, "grey": &m.Grey, "white": &m.White, "trapped": &m.Trapped, "spamtrap": &m.Spamtrap, "domain": &m.Domain} {
+				if n, ok := f.integer(name); ok {
+					*dst = int64(n)
+				}
+			}
+			return &m, nil
 		case TypeReplace:
 			m := ReplaceRequest{AF: int(core.IPv4)}
 			m.Set, _ = f.str("name")

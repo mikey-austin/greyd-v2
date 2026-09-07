@@ -34,6 +34,7 @@ import (
 	"github.com/mikey-austin/greyd-golang/internal/ipc"
 	"github.com/mikey-austin/greyd-golang/internal/logger"
 	"github.com/mikey-austin/greyd-golang/internal/settings"
+	"github.com/mikey-austin/greyd-golang/internal/stats"
 )
 
 // Defaults from grey.h / grey.c / constants.h.
@@ -388,12 +389,27 @@ func (g *Greylister) ScanOnce(ctx context.Context) error {
 		if err := ipc.WriteBlacklist(g.trapOut, g.cfg.TraplistName, g.cfg.TraplistMessage, res.Traplist); err != nil {
 			g.log.Debug("could not send traplist", "err", err)
 		}
+		g.reportCounts(ctx, now)
 	}
 	g.updateFirewall(core.IPv4, res.Whitelist)
 	if g.ipv6 {
 		g.updateFirewall(core.IPv6, res.WhitelistV6)
 	}
 	return nil
+}
+
+// reportCounts sends the entry counts to the main process for greyd
+// --stats and greyd-monitor.
+func (g *Greylister) reportCounts(ctx context.Context, now time.Time) {
+	c, err := stats.Summarize(ctx, g.store)
+	if err != nil {
+		g.log.Debug("could not count database entries", "err", err)
+		return
+	}
+	m := ipc.ScanStats{At: now.Unix(), Grey: c.Grey, White: c.White, Trapped: c.Trapped, Spamtrap: c.Spamtrap, Domain: c.Domain}
+	if err := ipc.WriteScanStats(g.trapOut, m); err != nil {
+		g.log.Debug("could not send scan statistics", "err", err)
+	}
 }
 
 func (g *Greylister) updateFirewall(af core.Family, ips []string) {

@@ -46,6 +46,9 @@ type Global struct {
 	// Sandbox confines each process after it has dropped privileges
 	// (Landlock and seccomp on Linux, pledge on OpenBSD).
 	Sandbox bool `conf:"sandbox" def:"1"`
+	// SandboxStrict replaces the seccomp deny list with an allow list of
+	// the system calls the Go runtime and the drivers are known to use.
+	SandboxStrict bool `conf:"sandbox_strict" def:"0"`
 
 	MaxCons      int `conf:"max_cons" def:"800"`
 	MaxConsBlack int `conf:"max_cons_black" def:"800"`
@@ -122,6 +125,18 @@ type SPF struct {
 	WhitelistOnPass bool `conf:"whitelist_on_pass" def:"0"`
 }
 
+// Monitor holds the greyd-monitor variables.
+type Monitor struct {
+	BindAddress string `conf:"bind_address" def:"127.0.0.1"`
+	Port        int    `conf:"port" def:"9143"`
+	// Interval is the number of seconds between polls of greyd.
+	Interval int `conf:"interval" def:"30"`
+	// User is the account greyd-monitor runs as when started by root;
+	// empty means the main greyd user, which the configuration socket
+	// admits.
+	User string `conf:"user"`
+}
+
 // Setup holds the greyd-setup variables.
 type Setup struct {
 	Lists     []string `conf:"lists"`
@@ -152,6 +167,7 @@ type Settings struct {
 	Sync     Sync
 	SPF      SPF
 	Setup    Setup
+	Monitor  Monitor
 	Firewall Firewall
 	Database Database
 
@@ -173,7 +189,7 @@ type Settings struct {
 func (s *Settings) Raw() *config.Config { return s.raw }
 
 // sections lists the known sections and the struct decoded from each.
-var sectionNames = []string{config.DefaultSection, "grey", "sync", "spf", "setup", "firewall", "database"}
+var sectionNames = []string{config.DefaultSection, "grey", "sync", "spf", "setup", "monitor", "firewall", "database"}
 
 // Load decodes cfg. Validation failures are returned as an error; unknown
 // variables only produce Warnings.
@@ -185,6 +201,7 @@ func Load(cfg *config.Config) (*Settings, error) {
 		"sync":                &s.Sync,
 		"spf":                 &s.SPF,
 		"setup":               &s.Setup,
+		"monitor":             &s.Monitor,
 		"firewall":            &s.Firewall,
 		"database":            &s.Database,
 	}
@@ -330,6 +347,8 @@ func (s *Settings) Validate() error {
 	port("port", s.Port)
 	port("config_port", s.ConfigPort)
 	port("sync.port", s.Sync.Port)
+	port("monitor.port", s.Monitor.Port)
+	check(s.Monitor.Interval > 0, "monitor.interval must be positive, got %d", s.Monitor.Interval)
 	check(s.ErrorCode == "450" || s.ErrorCode == "550", "error_code must be \"450\" or \"550\", got %q", s.ErrorCode)
 	check(s.MaxCons > 0, "max_cons must be positive, got %d", s.MaxCons)
 	check(s.MaxConsBlack >= 0, "max_cons_black must not be negative, got %d", s.MaxConsBlack)
@@ -386,4 +405,26 @@ func (s *Settings) WithoutSyncHosts() *Settings {
 	c := *s
 	c.Sync.Hosts = nil
 	return &c
+}
+
+// DatabasePorts lists the TCP ports the configured database driver
+// connects to (empty for embedded stores), for sandbox network rules.
+func (s *Settings) DatabasePorts() []uint16 {
+	var def int
+	switch strings.ToLower(strings.TrimSpace(s.Database.Driver)) {
+	case "mysql", "greyd_mysql":
+		def = 3306
+	case "postgresql", "postgres", "greyd_postgresql":
+		def = 5432
+	default:
+		return nil
+	}
+	port := def
+	if s.Database.Raw != nil {
+		port = s.Database.Raw.Int("port", def)
+	}
+	if port <= 0 || port > 65535 {
+		return nil
+	}
+	return []uint16{uint16(port)}
 }

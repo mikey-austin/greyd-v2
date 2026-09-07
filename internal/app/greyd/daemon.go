@@ -23,6 +23,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/mikey-austin/greyd-golang/internal/blacklist"
 	"github.com/mikey-austin/greyd-golang/internal/ipc"
@@ -54,6 +55,8 @@ type children struct {
 	// exited is closed when a child exits unexpectedly.
 	exited <-chan struct{}
 	stop   func()
+	// reload forwards a SIGHUP (log reopen) to the children; may be nil.
+	reload func()
 }
 
 // childStarter launches the firewall and greylister roles; spawnChildren
@@ -89,12 +92,17 @@ type daemon struct {
 	files   mainFiles
 	pidfile *privs.Pidfile
 	chroot  string
+
+	started time.Time
+	scan    scanStats
+	// reload is called on SIGHUP after the parent reopened its own log.
+	reload func()
 }
 
 // newDaemon validates the configuration and computes the connection
 // limits (the first part of main()).
 func newDaemon(s *settings.Settings, o Options, maxFiles int, log *slog.Logger) (*daemon, error) {
-	d := &daemon{s: s, opts: o, log: log, maxFiles: maxFiles, blMap: make(map[string]*blacklist.Blacklist)}
+	d := &daemon{s: s, opts: o, log: log, maxFiles: maxFiles, blMap: make(map[string]*blacklist.Blacklist), started: time.Now()}
 
 	d.maxCons = min(s.MaxCons, maxFiles)
 	d.maxBlack = min(s.MaxConsBlack, maxFiles)

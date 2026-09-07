@@ -19,6 +19,7 @@ package ipc
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/mikey-austin/greyd-golang/internal/ip"
@@ -35,6 +36,13 @@ const (
 const (
 	TypeNAT     = "nat"
 	TypeReplace = "replace"
+)
+
+// Statistics message types (additions of the Go port).
+const (
+	TypeStats      = "stats"
+	TypeStatsReply = "stats_reply"
+	TypeScanStats  = "scan_stats"
 )
 
 // Builder builds a framed message.
@@ -191,4 +199,33 @@ func WriteNAT(w io.Writer, src string, srcPort uint16, proxy string, proxyPort u
 func WriteDst(w io.Writer, dst string) error {
 	_, err := fmt.Fprintf(w, "dst=\"%s\"\n%s\n", Sanitize(dst), Terminator)
 	return err
+}
+
+// WriteStatsRequest asks greyd for its counters.
+func WriteStatsRequest(w io.Writer) error {
+	return (&Builder{}).Str("type", TypeStats).Send(w)
+}
+
+// WriteStatsReply sends counters (sorted by name) and blacklists.
+func WriteStatsReply(w io.Writer, counters map[string]int64, blacklists []string) error {
+	m := (&Builder{}).Str("type", TypeStatsReply)
+	names := make([]string, 0, len(counters))
+	for n := range counters {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		fmt.Fprintf(&m.b, "%s = %d\n", n, counters[n])
+	}
+	if len(blacklists) > 0 {
+		m.StrList("blacklists", blacklists)
+	}
+	return m.Send(w)
+}
+
+// WriteScanStats reports the entry counts of a database scan.
+func WriteScanStats(w io.Writer, s ScanStats) error {
+	m := (&Builder{}).Str("type", TypeScanStats)
+	fmt.Fprintf(&m.b, "at = %d\ngrey = %d\nwhite = %d\ntrapped = %d\nspamtrap = %d\ndomain = %d\n", s.At, s.Grey, s.White, s.Trapped, s.Spamtrap, s.Domain)
+	return m.Send(w)
 }

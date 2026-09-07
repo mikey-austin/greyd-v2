@@ -87,6 +87,7 @@ The greyd suite
   * **greydb**      - greylisting/greytrapping database management
   * **greyd-setup** - blacklist & whitelist population
   * **greylogd**    - connection tracking & whitelist updating
+  * **greyd-monitor** - Prometheus exporter for greyd's counters
 
 Development Status
 ------------------
@@ -114,7 +115,9 @@ For the BSDs, a **PF** firewall driver has been implemented. A **dummy** firewal
 
 The current code base is a port to Go of the original C implementation. It keeps the same
 programs, configuration files, command line switches, wire protocols and sync protocol, so it
-is a drop-in replacement. The following points remain to be done:
+is a drop-in replacement. The process model, the pipes between the processes and the
+ports & adapters layout of the code are described in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The following points remain to be done:
   * the **netfilter** and **pf** firewall drivers have been ported but still need verification
     on real hosts (the port was developed without root access to a suitable kernel)
   * the **npf** (NetBSD) firewall driver has not yet been ported; on NetBSD the **pf** driver
@@ -143,8 +146,12 @@ checked against the peer's credentials), `max_config_frame`, `max_cons_per_sourc
 `max_line_length`, `max_domains`, `max_entries` and the sync `replay_window`, plus `sandbox`
 (on by default: Landlock, seccomp and no-new-privs on Linux, pledge on OpenBSD, applied by each
 process after it drops privileges). `greyd -t`
-checks a configuration file and `greyd --drivers` lists the compiled-in drivers. See
-**greyd.conf**(5).
+checks a configuration file, `greyd --drivers` lists the compiled-in drivers and `greyd --stats`
+prints the running daemon's counters (also served to Prometheus by **greyd-monitor**(8) and
+summarised by `greydb -s`). The PROXY protocol handler accepts version 1 and version 2 headers.
+On Linux, `greyd` can also be started without root through the installed socket units
+(`greyd.socket`, `greyd-config.socket`, `greyd-unprivileged.service`). See **greyd.conf**(5) and
+**greyd**(8).
 
 Licensing
 ---------

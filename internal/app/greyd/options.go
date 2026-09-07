@@ -35,7 +35,7 @@ import (
 const Usage = "usage: greyd [-f config] [-45bdvF] [-B maxblack] [-c maxcon] [-G passtime:greyexp:whiteexp]\n" +
 	"\t[-h hostname] [-l address] [-M address] [-n name] [-p port]\n" +
 	"\t[-P pidfile] [-S secs] [-s secs] [-L ipv6 address]\n" +
-	"\t[-w window] [-Y synctarget] [-y synclisten] [-t] [--drivers] [--version]\n"
+	"\t[-w window] [-Y synctarget] [-y synclisten] [-t] [--drivers] [--stats] [--version]\n"
 
 // ErrUsage signals a command line error; the caller prints Usage.
 var ErrUsage = errors.New("usage")
@@ -55,6 +55,8 @@ type Options struct {
 	ListDrivers bool
 	// ShowVersion (--version) prints the version and exits.
 	ShowVersion bool
+	// ShowStats (--stats) prints the counters of the running daemon.
+	ShowStats bool
 }
 
 // optString lists the switches (getopt "F456f:l:L:c:B:p:bdG:h:s:S:M:n:vw:y:Y:P:").
@@ -72,6 +74,8 @@ func ParseFlags(args []string, maxFiles int) (Options, error) {
 			o.ListDrivers = true
 		case "--version":
 			o.ShowVersion = true
+		case "--stats":
+			o.ShowStats = true
 		default:
 			short = append(short, a)
 		}

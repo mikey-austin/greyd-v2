@@ -25,12 +25,14 @@ package smtp
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -158,6 +160,45 @@ type Counters struct {
 	MaxCons      int
 	MaxBlack     int
 	perSource    map[netip.Addr]int
+
+	// Cumulative totals since start (see Totals).
+	accepted, acceptedBlack, refusedFull, refusedSource atomic.Int64
+	greyTuples, repliesGrey, repliesBlack, proxyHeaders atomic.Int64
+}
+
+// Totals are the cumulative connection statistics.
+type Totals struct {
+	// Accepted counts connections handed to the state machine;
+	// AcceptedBlack those of them that matched a blacklist on arrival.
+	Accepted, AcceptedBlack int64
+	// RefusedFull and RefusedSource count connections closed on accept
+	// for the global and the per-source limit.
+	RefusedFull, RefusedSource int64
+	// GreyTuples counts envelopes sent to the greylister.
+	GreyTuples int64
+	// RepliesGrey and RepliesBlack count final rejections by kind.
+	RepliesGrey, RepliesBlack int64
+	// ProxyHeaders counts accepted PROXY protocol headers.
+	ProxyHeaders int64
+}
+
+// Totals returns the cumulative statistics.
+func (c *Counters) Totals() Totals {
+	return Totals{
+		Accepted: c.accepted.Load(), AcceptedBlack: c.acceptedBlack.Load(),
+		RefusedFull: c.refusedFull.Load(), RefusedSource: c.refusedSource.Load(),
+		GreyTuples: c.greyTuples.Load(), RepliesGrey: c.repliesGrey.Load(), RepliesBlack: c.repliesBlack.Load(),
+		ProxyHeaders: c.proxyHeaders.Load(),
+	}
+}
+
+// CountRefused records a connection closed on accept.
+func (c *Counters) CountRefused(perSource bool) {
+	if perSource {
+		c.refusedSource.Add(1)
+	} else {
+		c.refusedFull.Add(1)
+	}
 }
 
 // NewCounters creates counters with the given limits.
@@ -169,8 +210,10 @@ func (c *Counters) add(src netip.Addr, black bool) (clients, blackClients int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Clients++
+	c.accepted.Add(1)
 	if black {
 		c.BlackClients++
+		c.acceptedBlack.Add(1)
 	}
 	if src.IsValid() {
 		c.perSource[src]++
@@ -248,8 +291,9 @@ type Conn struct {
 
 	start time.Time
 
-	in    []byte // accumulated input
-	InBuf string // last complete input line(s), trailing CR/LF removed
+	in      []byte // accumulated input
+	InBuf   string // last complete input line(s), trailing CR/LF removed
+	proxyV2 []byte // a binary proxy protocol header awaiting NextState
 
 	Out    []byte
 	outPos int
@@ -391,45 +435,109 @@ func (c *Conn) setRead() {
 }
 
 // HandleRead reads client input until a line terminator arrives or the
-// buffer is full, then advances the state machine (Con_handle_read).
+// buffer is full, then advances the state machine (Con_handle_read). The
+// first read of a proxied connection is the proxy protocol header, which
+// may be binary.
 func (c *Conn) HandleRead() {
 	if c.closed || !c.r {
 		return
 	}
-	limit := c.cfg.lineLimit()
 	if c.State == StateProxyOut {
-		// Only a proxy protocol header is acceptable as the first line.
-		limit = min(limit, MaxProxyHeader)
+		c.readProxyHeader()
+		return
 	}
+	limit := c.cfg.lineLimit()
 	buf := make([]byte, limit)
-	for {
-		remaining := limit - len(c.in)
-		if remaining <= 0 {
-			break
-		}
-		if c.nc != nil {
-			_ = c.nc.SetReadDeadline(time.Now().Add(MaxTime))
-		}
-		n, err := c.rw.Read(buf[:remaining])
-		if n > 0 {
-			c.in = append(c.in, buf[:n]...)
-		}
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				c.log.Warn("connection read error", "err", err)
-			}
-			c.Close()
-			return
-		}
-		if n == 0 {
-			c.Close()
+	for len(c.in) < limit {
+		n, ok := c.readChunk(buf[:limit-len(c.in)])
+		if !ok {
 			return
 		}
 		if bytes.IndexByte(buf[:n], '\n') >= 0 {
 			break
 		}
 	}
+	c.finishLine()
+}
 
+// readProxyHeader reads the proxy protocol header that must open a proxied
+// connection. The first bytes decide the version: a version 2 header
+// starts with a fixed binary signature and declares its own length, and is
+// read exactly (so nothing of the SMTP dialogue behind it is consumed) and
+// left in proxyV2 for NextState; anything else is read as a version 1
+// text line, bounded by MaxProxyHeader, into InBuf.
+func (c *Conn) readProxyHeader() {
+	limit := min(c.cfg.lineLimit(), MaxProxyHeader)
+	buf := make([]byte, max(limit, ProxyV2HeaderLen+MaxProxyV2Length))
+
+	// Read until the input either matches the whole v2 signature or
+	// diverges from it.
+	for len(c.in) < len(ProxyV2Signature) && bytes.HasPrefix(ProxyV2Signature, c.in) {
+		if _, ok := c.readChunk(buf[:len(ProxyV2Signature)-len(c.in)]); !ok {
+			return
+		}
+	}
+	if !bytes.HasPrefix(c.in, ProxyV2Signature) {
+		// Version 1: a text line.
+		for len(c.in) < limit && bytes.IndexByte(c.in, '\n') < 0 {
+			if _, ok := c.readChunk(buf[:limit-len(c.in)]); !ok {
+				return
+			}
+		}
+		c.finishLine()
+		return
+	}
+
+	// Version 2: the fixed header, then exactly the declared address block.
+	for len(c.in) < ProxyV2HeaderLen {
+		if _, ok := c.readChunk(buf[:ProxyV2HeaderLen-len(c.in)]); !ok {
+			return
+		}
+	}
+	total := ProxyV2HeaderLen + int(binary.BigEndian.Uint16(c.in[14:16]))
+	if total > ProxyV2HeaderLen+MaxProxyV2Length {
+		c.log.Warn("proxy protocol v2 header too long", "length", total-ProxyV2HeaderLen)
+		c.Close()
+		return
+	}
+	for len(c.in) < total {
+		if _, ok := c.readChunk(buf[:total-len(c.in)]); !ok {
+			return
+		}
+	}
+	c.proxyV2 = append([]byte(nil), c.in...)
+	c.InBuf = ""
+	c.r = false
+	c.NextState()
+}
+
+// readChunk performs one read into buf, appending what arrived to in. On
+// an error or end of file the connection is closed and false returned.
+func (c *Conn) readChunk(buf []byte) (n int, ok bool) {
+	if c.nc != nil {
+		_ = c.nc.SetReadDeadline(time.Now().Add(MaxTime))
+	}
+	n, err := c.rw.Read(buf)
+	if n > 0 {
+		c.in = append(c.in, buf[:n]...)
+	}
+	if err != nil {
+		if !errors.Is(err, io.EOF) {
+			c.log.Warn("connection read error", "err", err)
+		}
+		c.Close()
+		return n, false
+	}
+	if n == 0 {
+		c.Close()
+		return n, false
+	}
+	return n, true
+}
+
+// finishLine turns the accumulated input into InBuf and advances the
+// state machine.
+func (c *Conn) finishLine() {
 	// The C implementation handled the buffer as a string, so anything
 	// after a NUL was invisible to it; do the same rather than carry NULs
 	// into database keys.
@@ -502,9 +610,11 @@ func (c *Conn) HandleWrite() {
 // for greylisted ones (Con_build_reply).
 func (c *Conn) BuildReply(code string) {
 	if c.black {
+		c.counters.repliesBlack.Add(1)
 		c.setOut(FormatReply(c.Lists, code, c.SrcAddr))
 		return
 	}
+	c.counters.repliesGrey.Add(1)
 	c.setOut(GreyReply)
 }
 

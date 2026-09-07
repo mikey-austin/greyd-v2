@@ -3,7 +3,7 @@ greydb(8) -- greyd database tool
 
 ## SYNOPSIS
 
-`greydb` [**-f** config] [[**-TDt**] **-a** keys] [[**-TDt**] **-d** keys] [**-Y** synctarget]
+`greydb` [**-f** config] [**-s**] [[**-TDt**] **-a** keys] [[**-TDt**] **-d** keys] [**-Y** synctarget]
 
 ## DESCRIPTION
 
@@ -31,6 +31,9 @@ Add or delete the keys as TRAPPED entries. See the GREYTRAPPING section of **gre
 
 * **-Y** *synctarget*:
   Add a target to receive synchronisation messages; see [SYNCHRONISATION][] below. This option can be specified multiple times.
+
+* **-s**:
+  Print a summary instead of the listing: the number of GREY, WHITE, TRAPPED, SPAMTRAP and DOMAIN entries, one per line.
 
 If adding or deleting a SPAMTRAP address (**-T**), keys should be specified as email addresses:
 

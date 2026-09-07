@@ -148,6 +148,11 @@ systemd's search path):
                           greylogd_pidfile)
     greyd-setup.service   one-shot blacklist refresh
     greyd-setup.timer     runs greyd-setup.service daily
+    greyd-monitor.service the Prometheus exporter (runs as the greyd user;
+                          needs config_socket in greyd.conf)
+    greyd.socket, greyd-config.socket, greyd-unprivileged.service
+                          socket activated alternative to greyd.service
+                          that never runs as root (see below)
 
 The daemons are started as root and drop privileges themselves (see the
 drop_privs option in greyd.conf(5)); the units confine them with a reduced
@@ -163,6 +168,59 @@ directories described above:
 
 The timer replaces the cron job above; override OnCalendar= in
 /etc/systemd/system/greyd-setup.timer.d/ to run it more often.
+
+Running greyd without root (Linux): systemd can bind the SMTP port and the
+configuration socket and start greyd as the "greyd" user with only
+CAP_NET_ADMIN (for ipset and conntrack). greyd adopts the passed sockets,
+skips the chroot (Landlock confines the filesystem instead) and keeps the
+service user for all three processes, so the database directory must be
+owned by "greyd" rather than "greydb" in this mode:
+
+    # chown -R greyd:greyd /var/lib/greyd
+    # systemctl disable --now greyd
+    # systemctl enable --now greyd.socket greyd-config.socket
+
+greyd-setup and greyd-monitor talk to /run/greyd/config.sock in this setup;
+set config_socket = "/run/greyd/config.sock" in greyd.conf so that they find
+it. See SOCKET ACTIVATION in greyd(8).
+
+Monitoring: greyd-monitor(8) serves Prometheus metrics on 127.0.0.1:9143
+by default (section "monitor" in greyd.conf(5)); "greyd --stats" prints the
+same counters and "greydb -s" summarises the database.
+
+Packaging and releases
+----------------------
+
+    $ make packages
+
+builds deb and rpm packages into dist/ with nfpm (https://nfpm.goreleaser.com;
+"go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest" if the target
+reports it missing). The programs are rebuilt with the package paths
+(prefix=/usr, sysconfdir=/etc, the database under /var/lib/greyd and the
+pidfiles under /var/empty, see PKG_MAKEVARS in packages/release.mk) into
+packages/nfpm/stage/ together with the generated configuration, units and
+manual pages, and packages/nfpm/nfpm.yaml describes the package. The
+post-install script creates the greyd and greydb users and the directories
+listed above; greyd.conf is a conffile (config|noreplace) so local edits
+survive upgrades. The units are installed but not enabled.
+
+Tagged releases (v*) are built by .github/workflows/release.yml with
+goreleaser from .goreleaser.yaml: static builds of every program for
+linux/amd64, linux/arm64, freebsd/amd64 and openbsd/amd64, reproducible
+tar.gz archives, the same deb and rpm packages, checksums.txt, a syft SBOM
+(*.sbom.json) for each archive and package, and checksums.txt.sig with
+checksums.txt.pem, a keyless cosign signature made with the workflow's
+OIDC identity. Verify a download with:
+
+    $ cosign verify-blob --certificate checksums.txt.pem \
+          --signature checksums.txt.sig \
+          --certificate-identity-regexp 'https://github.com/mikey-austin/greyd-golang/' \
+          --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+          checksums.txt
+    $ sha256sum -c --ignore-missing checksums.txt
+
+"make release-check" validates the goreleaser configuration and
+"make release-snapshot" builds everything into dist/ without publishing.
 
 Regenerating the configuration parser
 -------------------------------------

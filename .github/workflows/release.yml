@@ -1,0 +1,68 @@
+name: Release
+
+# Publishes a GitHub release with goreleaser (.goreleaser.yaml) when a v*
+# tag is pushed: per-program static builds, tar.gz archives, deb and rpm
+# packages, sha256 checksums, syft SBOMs and a keyless cosign signature of
+# the checksum file. A manual run builds a snapshot without publishing.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the release and upload assets
+  id-token: write   # cosign keyless signing (OIDC token)
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # goreleaser needs the tags and history for the changelog
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: install syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # The sample configuration, init scripts and systemd units are
+      # generated from .in templates with the package paths (the same
+      # values as PKG_MAKEVARS in packages/release.mk); the goreleaser
+      # before hook (packages/nfpm/stage.sh) repeats this and stages the
+      # results for the deb/rpm packages.
+      - name: generate configuration with the package paths
+        run: |
+          make -B conf prefix=/usr sysconfdir=/etc localstatedir=/var/lib \
+              unitdir=/usr/lib/systemd/system DEFAULT_CONFIG=/etc/greyd/greyd.conf \
+              GREYD_PIDFILE=/var/empty/greyd/greyd.pid \
+              GREYLOGD_PIDFILE=/var/empty/greylogd/greylogd.pid
+
+      - name: goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: ${{ github.event_name == 'workflow_dispatch' && 'release --snapshot --clean --skip=publish' || 'release --clean' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: upload snapshot artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/checksums.txt*
+            dist/*.sbom.json
+          if-no-files-found: error

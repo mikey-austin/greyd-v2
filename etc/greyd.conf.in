@@ -106,6 +106,7 @@ setrlimit = 1
 # filesystem access.
 #
 # sandbox = 1
+# sandbox_strict = 0
 
 #
 # Specify the maximum number of connections.
@@ -251,6 +252,16 @@ section grey {
 
     # Cap on the number of permitted domains loaded from the file.
     #max_domains = 100000
+}
+
+#
+# greyd-monitor, the Prometheus exporter (needs config_socket above to
+# run without root).
+#
+section monitor {
+    #bind_address = "127.0.0.1"
+    #port         = 9143
+    #interval     = 30
 }
 
 #

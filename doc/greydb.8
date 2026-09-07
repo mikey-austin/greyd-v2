@@ -7,7 +7,7 @@
 \fBgreydb\fR \- greyd database tool
 .
 .SH "SYNOPSIS"
-\fBgreydb\fR [\fB\-f\fR config] [[\fB\-TDt\fR] \fB\-a\fR keys] [[\fB\-TDt\fR] \fB\-d\fR keys] [\fB\-Y\fR synctarget]
+\fBgreydb\fR [\fB\-f\fR config] [\fB\-s\fR] [[\fB\-TDt\fR] \fB\-a\fR keys] [[\fB\-TDt\fR] \fB\-d\fR keys] [\fB\-Y\fR synctarget]
 .
 .SH "DESCRIPTION"
 \fBgreydb\fR manipulates the \fBgreyd\fR database used for \fBgreyd\fR(8)\.
@@ -73,6 +73,10 @@ individual@greyd\.org
 .
 .P
 Otherwise keys must be numerical IP addresses\.
+.
+.TP
+\fB\-s\fR
+Print a summary instead of the listing: the number of GREY, WHITE, TRAPPED, SPAMTRAP and DOMAIN entries, one per line\.
 .
 .SH "DATABASE OUTPUT FORMAT"
 If invoked without any arguments, \fBgreydb\fR lists the contents of the database in a text format\.

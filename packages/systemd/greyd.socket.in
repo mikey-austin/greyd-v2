@@ -1,0 +1,21 @@
+# greyd.socket - generated from packages/systemd/greyd.socket.in by make.
+#
+# The SMTP listener for socket activated greyd (greyd-unprivileged.service):
+# systemd binds the port and hands the socket to greyd, which then never
+# needs root. Pair with greyd-config.socket. The port must match "port" in
+# greyd.conf(5); the firewall redirects port 25 to it.
+
+[Unit]
+Description=greyd SMTP socket
+Documentation=man:greyd(8)
+Conflicts=greyd.service
+
+[Socket]
+ListenStream=8025
+FileDescriptorName=smtp
+ReuseAddress=true
+Backlog=10
+Service=greyd-unprivileged.service
+
+[Install]
+WantedBy=sockets.target

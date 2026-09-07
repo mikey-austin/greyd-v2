@@ -272,7 +272,8 @@ func Run(args []string, stderr io.Writer) int {
 		}
 		if s.Sandbox {
 			pf := core.NormalizeDriver(s.Firewall.Driver) == "pf"
-			p := sandbox.Profile{Role: sandbox.RoleGrey, Exec: pf, Devices: pf, ReadPaths: []string{"/etc"}}
+			p := sandbox.Profile{Role: sandbox.RoleGrey, Exec: pf, Devices: pf, ReadPaths: []string{"/etc"}, Strict: s.SandboxStrict}
+			p.ConnectPorts = append([]uint16{53}, s.DatabasePorts()...)
 			p.WritePaths = append(p.WritePaths, core.WritablePaths(store)...)
 			p.WritePaths = append(p.WritePaths, filepath.Dir(pidfilePath))
 			if s.LogToFile != "" {

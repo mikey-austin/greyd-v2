@@ -70,6 +70,14 @@ func (d *daemon) handleConfigConn(conn net.Conn) {
 		}
 		return
 	}
+	if _, ok := m.(*ipc.StatsRequest); ok {
+		_ = conn.SetWriteDeadline(time.Now().Add(cfgConnTimeout))
+		counters, bls := d.statsCounters(time.Now())
+		if err := ipc.WriteStatsReply(conn, counters, bls); err != nil {
+			d.log.Debug("could not answer statistics request", "err", err)
+		}
+		return
+	}
 	d.addBlacklist(m, "configuration connection")
 }
 
@@ -126,6 +134,10 @@ func (d *daemon) readTrapPipe(ctx context.Context) error {
 				return nil
 			}
 			d.log.Warn("trap pipe message failed", "err", err)
+			continue
+		}
+		if sc, ok := m.(*ipc.ScanStats); ok {
+			d.scan.set(sc)
 			continue
 		}
 		d.addBlacklist(m, "trap pipe")

@@ -21,6 +21,7 @@ package smtp
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 
 	"github.com/mikey-austin/greyd-golang/internal/core"
@@ -93,20 +94,9 @@ func (c *Conn) NextState() {
 			return
 
 		case StateProxyOut:
-			if match(c.InBuf, "PROXY") && c.allowProxy() {
-				src, dst, err := ParseProxyHeader(c.InBuf)
-				switch {
-				case err == nil:
-					c.SrcAddr = src.String()
-					c.DstAddr = dst.String()
-					c.rematchAfterProxy()
-					st = StateBannerIn
-					continue
-				case errors.Is(err, ErrProxyUnknown):
-					c.log.Debug("UNKNOWN proxy protocol header encountered; refusing to continue")
-				default:
-					c.log.Warn("invalid proxy protocol header", "err", err)
-				}
+			if c.applyProxyHeader() {
+				st = StateBannerIn
+				continue
 			}
 			st = StateReply
 			continue
@@ -187,6 +177,8 @@ func (c *Conn) NextState() {
 						c.lookupOrigDst()
 						if err := ipc.WriteGrey(c.deps.GreyOut, c.DstAddr, c.SrcAddr, c.Helo, c.Mail, c.Rcpt); err != nil {
 							c.log.Warn("could not send grey entry", "err", err)
+						} else {
+							c.counters.greyTuples.Add(1)
 						}
 					}
 				} else {
@@ -298,6 +290,50 @@ func (c *Conn) allowProxy() bool {
 		return true
 	}
 	c.log.Warn("rejecting unknown proxy", "proxy", c.Src.Addr().Unmap())
+	return false
+}
+
+// applyProxyHeader checks the proxy protocol header read by HandleRead
+// (a v2 binary header in proxyV2, otherwise a v1 line in InBuf) against
+// the permitted proxies, and adopts the real client addresses it carries.
+// It reports whether the dialogue may proceed.
+func (c *Conn) applyProxyHeader() bool {
+	hdr := c.proxyV2
+	c.proxyV2 = nil
+	if hdr == nil && !match(c.InBuf, "PROXY") {
+		return false
+	}
+	if !c.allowProxy() {
+		return false
+	}
+	var (
+		src, dst netip.Addr
+		local    bool
+		err      error
+	)
+	if hdr != nil {
+		src, dst, local, err = ParseProxyHeaderV2(hdr)
+	} else {
+		src, dst, err = ParseProxyHeader(c.InBuf)
+	}
+	switch {
+	case err == nil:
+		c.counters.proxyHeaders.Add(1)
+		if local {
+			// A LOCAL command (e.g. a health check): the connection's
+			// own addresses stand.
+			c.log.Debug("LOCAL proxy protocol header; using the connection addresses")
+			return true
+		}
+		c.SrcAddr = src.String()
+		c.DstAddr = dst.String()
+		c.rematchAfterProxy()
+		return true
+	case errors.Is(err, ErrProxyUnknown):
+		c.log.Debug("UNKNOWN proxy protocol header encountered; refusing to continue")
+	default:
+		c.log.Warn("invalid proxy protocol header", "err", err)
+	}
 	return false
 }
 

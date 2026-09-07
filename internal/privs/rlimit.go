@@ -52,6 +52,15 @@ func MaxFiles() (int, error) {
 func SetMaxFiles(n int) error {
 	lim := unix.Rlimit{Cur: rlimT(n), Max: rlimT(n)}
 	if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &lim); err != nil {
+		// An unprivileged process cannot raise its hard limit; keep
+		// the hard limit and raise the soft limit as far as it goes.
+		var cur unix.Rlimit
+		if gerr := unix.Getrlimit(unix.RLIMIT_NOFILE, &cur); gerr == nil && cur.Max != unix.RLIM_INFINITY && rlimT(n) > cur.Max {
+			lim = unix.Rlimit{Cur: cur.Max, Max: cur.Max}
+			if err2 := unix.Setrlimit(unix.RLIMIT_NOFILE, &lim); err2 == nil {
+				return nil
+			}
+		}
 		return fmt.Errorf("setrlimit: %w", err)
 	}
 	return nil

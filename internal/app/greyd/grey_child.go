@@ -18,6 +18,7 @@ package greyd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -82,7 +83,9 @@ var scanInterval = grey.ScanInterval
 // the resolver configuration for SPF lookups, the database directory and
 // the log file's directory.
 func greySandboxProfile(s *settings.Settings, store core.Store) sandbox.Profile {
-	p := sandbox.Profile{Role: sandbox.RoleGrey, ReadPaths: []string{"/etc"}}
+	p := sandbox.Profile{Role: sandbox.RoleGrey, ReadPaths: []string{"/etc"}, Strict: s.SandboxStrict}
+	// DNS for SPF (TCP fallback) and the database server, if any.
+	p.ConnectPorts = append([]uint16{53}, s.DatabasePorts()...)
 	p.WritePaths = append(p.WritePaths, core.WritablePaths(store)...)
 	if s.LogToFile != "" {
 		p.WritePaths = append(p.WritePaths, filepath.Dir(s.LogToFile))
@@ -132,8 +135,11 @@ func runGreyChild(ctx context.Context, s *settings.Settings, files greyFiles, lo
 	}
 
 	if s.DropPrivs {
-		if err := privs.Drop(pw); err != nil {
-			return fmt.Errorf("failed to drop privileges: %w", err)
+		if err := privs.SwitchUser(pw); err != nil {
+			if !errors.Is(err, privs.ErrCannotSwitch) {
+				return fmt.Errorf("failed to drop privileges: %w", err)
+			}
+			log.Warn("running unprivileged: continuing as the current user", "wanted", pw.Username)
 		}
 	}
 

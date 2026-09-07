@@ -76,6 +76,7 @@ func (s *Server) ServeListener(ctx context.Context, l net.Listener) error {
 		}
 
 		if s.counters.Full() {
+			s.counters.CountRefused(false)
 			_ = conn.Close()
 			continue
 		}
@@ -83,6 +84,7 @@ func (s *Server) ServeListener(ctx context.Context, l net.Listener) error {
 			src := addrPortOf(conn.RemoteAddr()).Addr().Unmap()
 			if s.counters.SourceCount(src) >= s.cfg.MaxConsPerSource {
 				s.log.Warn("too many connections from source; dropping", "client", src, "limit", s.cfg.MaxConsPerSource)
+				s.counters.CountRefused(true)
 				_ = conn.Close()
 				continue
 			}

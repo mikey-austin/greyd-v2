@@ -3,7 +3,7 @@ greyd(8) -- spam deferral daemon
 
 ## SYNOPSIS
 
-`greyd` [**-456bdvF**] [**-f** config] [**-B** maxblack] [**-c** maxcon] [**-G** passtime:greyexp:whiteexp] [**-h** hostname] [**-l** address] [**-L** address] [**-M** address] [**-n** name] [**-p** port] [**-P** pidfile] [**-S** secs] [**-s** secs] [**-w** window] [**-Y** synctarget] [**-y** synclisten] [**-t**] [**--drivers**] [**--version**]
+`greyd` [**-456bdvF**] [**-f** config] [**-B** maxblack] [**-c** maxcon] [**-G** passtime:greyexp:whiteexp] [**-h** hostname] [**-l** address] [**-L** address] [**-M** address] [**-n** name] [**-p** port] [**-P** pidfile] [**-S** secs] [**-s** secs] [**-w** window] [**-Y** synctarget] [**-y** synclisten] [**-t**] [**--drivers**] [**--stats**] [**--version**]
 
 ## DESCRIPTION
 
@@ -97,6 +97,9 @@ Test the configuration: load **greyd.conf**(5) together with the other switches,
 
 * **--drivers**:
 Print the compiled-in database and firewall drivers and exit.
+
+* **--stats**:
+Print the counters of the running **greyd** (connections, rejections, blacklist and database entry counts) by querying it over the configuration socket, then exit. This needs the same access as **greyd-setup**(8): the *config_socket* as root or the **greyd** user, or root for the TCP configuration port. **greyd-monitor**(8) exports the same counters to Prometheus.
 
 * **--version**:
 Print the version and exit.
@@ -212,9 +215,17 @@ Addresses can be loaded into the table with the *ipset* command (consult the *ip
 
 **greyd** runs as three processes: the main process which accepts connections, a firewall process which holds the firewall handle, and the greylisting process which holds the database handles. The main and firewall processes run as *user* in *chroot_dir*, the greylister as the *grey* section *user*. When *sandbox* is enabled (the default) each process additionally confines itself with the platform's mechanisms once its setup is complete: Landlock, seccomp and *no_new_privs* on Linux, **pledge**(2) on OpenBSD. See **greyd.conf**(5).
 
+## SIGNALS
+
+**greyd** shuts down cleanly on SIGTERM and SIGINT. On SIGHUP the main process and both children reopen the file named by *log_to_file* (for log rotation) and continue; the configuration is not re-read. Blacklists are reloaded by running **greyd-setup**(8) again.
+
+## SOCKET ACTIVATION
+
+When started by a service manager that passes listening sockets (the systemd *LISTEN_FDS* protocol), **greyd** adopts them instead of binding: a TCP socket named *smtp* (and optionally *smtp6*) becomes the SMTP listener and a socket named *config* the configuration socket; unnamed sockets are assigned by kind. This lets **greyd** start as its unprivileged user: the chroot is then skipped with a warning (the sandbox confines the filesystem instead), the processes keep the service user rather than switching to *user* and the *grey* section *user*, and the netfilter driver needs only CAP_NET_ADMIN. The installed *greyd.socket*, *greyd-config.socket* and *greyd-unprivileged.service* units set this up; the database directory must then be owned by the service user.
+
 ## CONFIGURATION CONNECTIONS
 
-**greyd** listens for configuration connections on port 8026 by default, which can be overridden by setting the *config_port* configuration option. The configuration socket listens only on the INADDR_LOOPBACK address and only accepts connections from a reserved (privileged) source port. Alternatively, setting *config_socket* makes **greyd** listen on a unix domain socket instead; it is created mode 0600 and connections are accepted only from the super user and from the user **greyd** runs as, verified through the peer credentials. Blacklists larger than *max_config_frame* bytes are rejected. Configuration of **greyd** is done by connecting to the configuration socket, and sending blacklist information. Each blacklist consists of a name, a message to reject mail with, and addresses in CIDR format. This information is specified in the **greyd.conf** format, with entries terminated by '%%'. For example:
+**greyd** listens for configuration connections on port 8026 by default, which can be overridden by setting the *config_port* configuration option. The configuration socket listens only on the INADDR_LOOPBACK address and only accepts connections from a reserved (privileged) source port. Alternatively, setting *config_socket* makes **greyd** listen on a unix domain socket instead; it is created mode 0600 and connections are accepted only from the super user and from the user **greyd** runs as, verified through the peer credentials. Blacklists larger than *max_config_frame* bytes are rejected. Configuration of **greyd** is done by connecting to the configuration socket, and sending blacklist information. Each blacklist consists of a name, a message to reject mail with, and addresses in CIDR format. This information is specified in the **greyd.conf** format, with entries terminated by '%%'. A connection may instead send `type = "stats"` followed by '%%' to receive the counters shown by **--stats** in the same format. For example, a blacklist:
 
     name = "greyd-blacklist
     message = "Your IP address %A has been blocked by \\\\nour blacklist"
@@ -222,6 +233,10 @@ Addresses can be loaded into the table with the *ipset* command (consult the *ip
     %%
 
 A \" will produce a double quote in the output. \\\\n will produce a newline. %A will expand to the connecting IP address in dotted quad format. %% may be used to produce a single % in the output. \\ will produce a single \. **greyd** will reject mail by displaying all the messages from all blacklists in which a connecting address is matched. **greyd-setup**(8) is normally used to configure this information.
+
+## PROXY PROTOCOL
+
+When *proxy_protocol_enable* is set, **greyd** may sit behind a TCP load balancer such as haproxy or nginx and expects every connection to open with a proxy protocol header from one of the *proxy_protocol_permitted_proxies*. Both version 1 (text) and version 2 (binary) headers are accepted, and the version is detected from the first bytes of the connection. The addresses in the header replace the proxy's own for blacklist matching, greylisting and logging. Version 2 *LOCAL* commands (as sent by health checks) are honoured, in which case the connection's own addresses are used, and any TLVs are skipped. Headers for unsupported address families (UNSPEC, UDP and unix sockets), like a version 1 *UNKNOWN* header, are refused with the configured error code. See **greyd.conf**(5).
 
 ## SYNCHRONISATION
 

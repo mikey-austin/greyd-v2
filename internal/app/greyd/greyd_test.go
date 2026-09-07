@@ -23,6 +23,7 @@ import (
 	"github.com/mikey-austin/greyd-golang/internal/ipc"
 	"github.com/mikey-austin/greyd-golang/internal/logger"
 	"github.com/mikey-austin/greyd-golang/internal/settings"
+	"github.com/mikey-austin/greyd-golang/internal/stats"
 	"github.com/mikey-austin/greyd-golang/internal/version"
 )
 
@@ -492,5 +493,54 @@ func TestInformationalSwitches(t *testing.T) {
 	out.Reset()
 	if rc := Run([]string{"-t", "-f", nodrv}, &out, &errb); rc == 0 || !strings.Contains(out.String(), "unknown database driver") {
 		t.Fatalf("-t nodrv: rc=%d out=%q", rc, out.String())
+	}
+}
+
+func TestStatsOverUnixSocket(t *testing.T) {
+	memory.Reset("stats")
+	store := memory.Open("stats")
+	now := time.Now().Unix()
+	_ = core.Put(context.Background(), store, core.IPKey("127.0.0.1"), core.Data{First: now, Pass: now + 86400, Expire: now + 86400, BCount: 1, PCount: core.PCountTrapped})
+	_ = core.Put(context.Background(), store, core.IPKey("10.0.0.1"), core.Data{First: now, Pass: now, Expire: now + 86400, BCount: 1, PCount: 1})
+	sock := filepath.Join(t.TempDir(), "greyd.sock")
+	cfg := testConfig(t, "stats", fmt.Sprintf("config_socket = %q\n", sock))
+	r := startDaemon(t, cfg, Options{Opts: config.New()})
+
+	// One connection so the counters move.
+	conn, br := dialSMTP(t, r.d.MainAddr())
+	expectLine(t, br, "220 ")
+	fmt.Fprintf(conn, "QUIT\r\n")
+	expectLine(t, br, "221 ")
+	_ = conn.Close()
+
+	deadline := time.Now().Add(5 * time.Second)
+	var reply *ipc.StatsReply
+	for {
+		var err error
+		reply, err = stats.Query(context.Background(), stats.Dialer(cfg))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reply.Counters["db_entries_trapped"] == 1 && reply.Counters["connections_total"] >= 1 && len(reply.Blacklists) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stats never settled: %+v", reply)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if reply.Counters["db_entries_white"] != 1 || reply.Counters["greylisting_enabled"] != 1 || reply.Counters["max_cons"] != 800 {
+		t.Fatalf("counters %+v", reply.Counters)
+	}
+	if bls := stats.Blacklists(reply); bls[0].Name != "greyd-greytrap" || bls[0].Entries != 1 {
+		t.Fatalf("blacklists %+v", bls)
+	}
+	var out strings.Builder
+	if rc := showStats(cfg, &out, &out); rc != 0 || !strings.Contains(out.String(), "db_entries_trapped") || !strings.Contains(out.String(), "blacklist greyd-greytrap") {
+		t.Fatalf("--stats: rc=%d out=%q", rc, out.String())
+	}
+	r.stop()
+	if rc := showStats(cfg, &out, &out); rc == 0 {
+		t.Fatal("--stats against a stopped daemon must fail")
 	}
 }

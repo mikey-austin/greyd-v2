@@ -19,7 +19,6 @@ package greyd
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/netip"
@@ -86,13 +85,13 @@ func runFwChild(ctx context.Context, s *settings.Settings, files fwFiles, log *s
 	}
 	defer func() { _ = fw.Close() }()
 
-	if err := dropMainPrivs(s, driverIsPF(s)); err != nil {
+	if err := dropMainPrivs(s, driverIsPF(s), log); err != nil {
 		return err
 	}
 	if s.Sandbox {
 		// pf needs pfctl and ioctl on /dev/pf; netfilter only netlink.
 		pf := driverIsPF(s)
-		applySandbox(sandbox.Profile{Role: sandbox.RoleFirewall, Exec: pf, Devices: pf}, log)
+		applySandbox(sandbox.Profile{Role: sandbox.RoleFirewall, Exec: pf, Devices: pf, Strict: s.SandboxStrict}, log)
 	}
 
 	h := &fwHandler{fw: fw, out: files.natOut, log: log}
@@ -133,7 +132,7 @@ func driverIsPF(s *settings.Settings) bool {
 
 // dropMainPrivs chroots (unless skipChroot) and switches to the main user
 // according to the configuration.
-func dropMainPrivs(s *settings.Settings, skipChroot bool) error {
+func dropMainPrivs(s *settings.Settings, skipChroot bool, log *slog.Logger) error {
 	// The user database is not reachable from inside the jail, so the
 	// lookup must precede the chroot.
 	var u *user.User
@@ -143,17 +142,7 @@ func dropMainPrivs(s *settings.Settings, skipChroot bool) error {
 			return err
 		}
 	}
-	if !skipChroot && s.Chroot {
-		if err := privs.Chroot(s.ChrootDir); err != nil {
-			return err
-		}
-	}
-	if s.DropPrivs {
-		if err := privs.Drop(u); err != nil {
-			return fmt.Errorf("failed to drop privileges: %w", err)
-		}
-	}
-	return nil
+	return confine(!skipChroot && s.Chroot, s.ChrootDir, s.DropPrivs, u, log, nil)
 }
 
 // fwHandler serialises requests against the firewall handle.

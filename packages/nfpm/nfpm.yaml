@@ -1,0 +1,141 @@
+# nfpm configuration for the greyd deb and rpm packages
+# (https://nfpm.goreleaser.com/configuration/).
+#
+# Run it through "make packages" (packages/release.mk), which builds the
+# programs with the package paths into packages/nfpm/stage/sbin, stages
+# the generated configuration, units and manual pages with
+# packages/nfpm/stage.sh and exports the ${VERSION} and ${GOARCH}
+# variables used below. Adding a program only needs it in the Makefile's
+# PROGRAMS (or PKG_PROGRAMS in release.mk): the sbin glob picks it up.
+#
+# The nfpms section of .goreleaser.yaml ships the same contents; keep the
+# two in step.
+
+name: greyd
+arch: ${GOARCH}
+platform: linux
+version: ${VERSION}
+version_schema: semver
+release: "1"
+section: mail
+priority: optional
+maintainer: Mikey Austin <mikey@greyd.org>
+vendor: greyd.org
+homepage: https://greyd.org
+license: ISC
+description: |
+  Greylisting and blacklisting daemon.
+  greyd is a spam deferral daemon derived from OpenBSD's spamd. It sits in
+  front of a mail server, greylists unknown senders, tarpits blacklisted
+  hosts and keeps the firewall's whitelist up to date. This package
+  contains greyd, the greydb database tool, the greyd-setup blacklist
+  loader and the greylogd whitelist logger, with the netfilter, pf and
+  dummy firewall drivers and the bolt, sqlite, mysql, postgresql and
+  memory database drivers compiled in.
+
+# greyd-setup fetches blacklists with curl (curl_path in greyd.conf).
+depends:
+  - curl
+
+contents:
+  # Programs, built by "make packages" with the package paths compiled in.
+  - src: packages/nfpm/stage/sbin/*
+    dst: /usr/sbin/
+    file_info:
+      mode: 0755
+
+  # Sample configuration and init scripts; the administrator's edits are
+  # preserved across upgrades.
+  - src: packages/nfpm/stage/etc/greyd.conf
+    dst: /etc/greyd/greyd.conf
+    type: config|noreplace
+    file_info:
+      mode: 0644
+  - src: packages/nfpm/stage/etc/greyd.docker.conf
+    dst: /etc/greyd/greyd.docker.conf
+    type: config|noreplace
+    file_info:
+      mode: 0644
+  - src: packages/nfpm/stage/etc/greyd.redhat-init
+    dst: /etc/greyd/greyd.redhat-init
+    type: config|noreplace
+    file_info:
+      mode: 0644
+  - src: packages/nfpm/stage/etc/greylogd.redhat-init
+    dst: /etc/greyd/greylogd.redhat-init
+    type: config|noreplace
+    file_info:
+      mode: 0644
+  - src: packages/nfpm/stage/etc/greyd.debian-init
+    dst: /etc/greyd/greyd.debian-init
+    type: config|noreplace
+    file_info:
+      mode: 0644
+  - src: packages/nfpm/stage/etc/greylogd.debian-init
+    dst: /etc/greyd/greylogd.debian-init
+    type: config|noreplace
+    file_info:
+      mode: 0644
+
+  # systemd units (see INSTALL, "systemd"); not enabled automatically.
+  - src: packages/nfpm/stage/systemd/*
+    dst: /usr/lib/systemd/system/
+    file_info:
+      mode: 0644
+
+  # Manual pages.
+  - src: packages/nfpm/stage/man/man8/*.gz
+    dst: /usr/share/man/man8/
+    file_info:
+      mode: 0644
+  - src: packages/nfpm/stage/man/man5/*.gz
+    dst: /usr/share/man/man5/
+    file_info:
+      mode: 0644
+
+  # Documentation and the SQL schemas of the mysql and postgresql drivers
+  # (plain files: nfpm's deb packager drops the rpm-only "doc" type).
+  - src: packages/nfpm/stage/doc/README.md
+    dst: /usr/share/doc/greyd/README.md
+    file_info:
+      mode: 0644
+  - src: packages/nfpm/stage/doc/COPYING
+    dst: /usr/share/doc/greyd/COPYING
+    file_info:
+      mode: 0644
+  - src: packages/nfpm/stage/doc/AUTHORS
+    dst: /usr/share/doc/greyd/AUTHORS
+    file_info:
+      mode: 0644
+  - src: packages/nfpm/stage/doc/NEWS
+    dst: /usr/share/doc/greyd/NEWS
+    file_info:
+      mode: 0644
+  - src: packages/nfpm/stage/doc/ChangeLog
+    dst: /usr/share/doc/greyd/ChangeLog
+    file_info:
+      mode: 0644
+  - src: packages/nfpm/stage/doc/mysql_schema.sql
+    dst: /usr/share/doc/greyd/mysql_schema.sql
+    file_info:
+      mode: 0644
+  - src: packages/nfpm/stage/doc/postgresql_schema.sql
+    dst: /usr/share/doc/greyd/postgresql_schema.sql
+    file_info:
+      mode: 0644
+
+# The users, the database directory /var/lib/greyd and the pidfile
+# directories under /var/empty are created by postinstall.sh, so that they
+# are owned by users that exist by then and survive upgrades untouched.
+scripts:
+  postinstall: packages/nfpm/scripts/postinstall.sh
+  preremove: packages/nfpm/scripts/preremove.sh
+  postremove: packages/nfpm/scripts/postremove.sh
+
+rpm:
+  group: Applications/Internet
+  summary: Greylisting and blacklisting daemon
+  compression: gzip
+
+deb:
+  compression: gzip

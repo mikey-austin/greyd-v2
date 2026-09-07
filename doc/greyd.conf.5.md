@@ -62,7 +62,8 @@ The following options may be specified outside of a section. A *boolean* value i
   Detach from the controlling terminal. Defaults to *1*.
 
 * **proxy_protocol_enable** = *boolean*:
-  Proxy protocol configuration. Enabling this configuration allows greyd to sit behind a TCP load balancer that speaks the proxy protocol v1 as defined in the [protocol spec](http://www.haproxy.org/download/1.8/doc/proxy-protocol.txt).
+  Proxy protocol configuration. Enabling this configuration allows greyd to sit behind a TCP load balancer that speaks the proxy protocol as defined in the [protocol spec](http://www.haproxy.org/download/1.8/doc/proxy-protocol.txt).
+  Both version 1 (text) and version 2 (binary) headers are accepted; the version is detected from the first bytes of the connection. Version 2 *LOCAL* commands (as sent by health checks) are honoured, in which case the connection's own addresses are used, and any TLVs are skipped. Headers for unsupported address families (UNSPEC, UDP and unix sockets), like a version 1 *UNKNOWN* header, are refused.
   Defaults to *false*. Note that if this is enabled *all* client connections will need to specify the proxy protocol header first, ie there is no mixing of proxied and direct requests.
   You *must* also specify the `proxy_protocol_permitted_proxies` list of trusted proxies. There are many upstream proxies/load balancers that support this protocol, for example nginx and haproxy to name a couple.
 
@@ -82,6 +83,9 @@ The following options may be specified outside of a section. A *boolean* value i
 
 * **sandbox** = *boolean*:
   Confine each process once it has dropped privileges and opened what it needs. On Linux this sets *no_new_privs*, restricts filesystem access with Landlock (the main and firewall processes keep none, the greylister keeps its database directory and */etc* for the resolver) and installs a seccomp filter that refuses to start programs, trace, mount, load modules or change namespaces. On OpenBSD the processes are pledged. Unsupported kernels are skipped with a debug message. Enabled by default; set to *0* when running a database or firewall driver with unusual filesystem needs.
+
+* **sandbox_strict** = *boolean*:
+  On Linux, replace the sandbox's seccomp deny list with an allow list of the system calls the Go runtime and the drivers are known to use; anything else fails with EPERM and is logged by the affected operation rather than killing the process. Tighter, but a database driver or kernel needing an unlisted call will surface as errors, so try it in a test environment first. Off by default.
 
 * **setrlimit** = *boolean*:
   Use setrlimit to self-impose resource limits such as the maximum number of file descriptors (ie connections).
@@ -374,6 +378,22 @@ This section controls the operation of the SPF validation functionality. SPF sup
 
 * **whitelist_on_pass** = *boolean*:
   Whitelist a host which passes SPF validation. This is disabled by default.
+
+## MONITOR SECTION
+
+This section controls **greyd-monitor**(8), the Prometheus exporter.
+
+* **bind_address** = *string*:
+  The address to serve metrics on. Defaults to *127.0.0.1*; set it to an interface address to let a remote Prometheus scrape it.
+
+* **port** = *number*:
+  The metrics port. Defaults to *9143*.
+
+* **interval** = *number*:
+  How often, in seconds, **greyd-monitor** polls **greyd** for its counters. Defaults to *30*.
+
+* **user** = *string*:
+  The user **greyd-monitor** drops to when started as root. Defaults to the main *user*, which the configuration socket admits.
 
 ## SETUP SECTION
 

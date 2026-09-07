@@ -66,6 +66,13 @@ type Profile struct {
 	// still read, respectively read and modify. Missing paths are skipped.
 	ReadPaths  []string
 	WritePaths []string
+	// ConnectPorts are the TCP ports the process may still connect to
+	// (database servers, DNS). Where the kernel supports Landlock network
+	// rules every other TCP connect and every TCP bind is refused.
+	ConnectPorts []uint16
+	// Strict replaces the seccomp deny list with an allow list of the
+	// system calls the Go runtime and the drivers are known to use.
+	Strict bool
 }
 
 // ErrUnsupported is returned where the platform offers no confinement.

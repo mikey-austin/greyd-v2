@@ -34,6 +34,7 @@ import (
 	"github.com/mikey-austin/greyd-golang/internal/ip"
 	"github.com/mikey-austin/greyd-golang/internal/logger"
 	"github.com/mikey-austin/greyd-golang/internal/settings"
+	"github.com/mikey-austin/greyd-golang/internal/stats"
 	"github.com/mikey-austin/greyd-golang/internal/sync"
 	"github.com/mikey-austin/greyd-golang/internal/version"
 )
@@ -51,6 +52,7 @@ const (
 // Actions (ACTION_* in main_greydb.c).
 const (
 	actionList = iota
+	actionSummary
 	actionDel
 	actionAdd
 )
@@ -70,7 +72,7 @@ type syncer interface {
 }
 
 func usage(stderr io.Writer) int {
-	fmt.Fprintf(stderr, "usage: %s [-f config] [[-DTt] -a keys] [[-DTt] -d keys] \n", progName)
+	fmt.Fprintf(stderr, "usage: %s [-f config] [-s] [[-DTt] -a keys] [[-DTt] -d keys] \n", progName)
 	return 1
 }
 
@@ -93,7 +95,7 @@ func parseArgs(args []string) (options, bool) {
 		configFile: version.DefaultConfig,
 		opts:       config.New(),
 	}
-	opts, rest, err := cli.Parse("adtTDf:Y:", args)
+	opts, rest, err := cli.Parse("adtTDsf:Y:", args)
 	if err != nil {
 		return o, false
 	}
@@ -109,6 +111,8 @@ func parseArgs(args []string) (options, bool) {
 			o.typ = typeSpamtrap
 		case 'D':
 			o.typ = typeDomain
+		case 's':
+			o.action = actionSummary
 		case 'f':
 			o.configFile = opt.Arg
 		case 'Y':
@@ -188,6 +192,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case actionList:
 		ret = dbList(ctx, store, stdout, stderr)
 
+	case actionSummary:
+		ret = dbSummary(ctx, store, stdout, stderr)
+
 	case actionAdd, actionDel:
 		// Ensure that the sync bind address is not set (send only).
 		s = s.WithoutSyncBind()
@@ -239,6 +246,17 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		eng.Stop()
 	}
 	return ret
+}
+
+// dbSummary prints the entry counts by kind (-s).
+func dbSummary(ctx context.Context, store core.Store, stdout, stderr io.Writer) int {
+	c, err := stats.Summarize(ctx, store)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", progName, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "GREY\t%d\nWHITE\t%d\nTRAPPED\t%d\nSPAMTRAP\t%d\nDOMAIN\t%d\n", c.Grey, c.White, c.Trapped, c.Spamtrap, c.Domain)
+	return 0
 }
 
 // dbList prints every database entry (db_list).

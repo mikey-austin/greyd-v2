@@ -160,7 +160,7 @@ func TestAddInvalidIP(t *testing.T) {
 }
 
 func TestUsage(t *testing.T) {
-	const want = "usage: greydb [-f config] [[-DTt] -a keys] [[-DTt] -d keys] \n"
+	const want = "usage: greydb [-f config] [-s] [[-DTt] -a keys] [[-DTt] -d keys] \n"
 	cfg := writeConfig(t, "")
 	for _, args := range [][]string{
 		{"-f", cfg, "-T"},

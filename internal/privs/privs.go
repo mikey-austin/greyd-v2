@@ -20,6 +20,7 @@
 package privs
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -80,6 +81,29 @@ func Drop(u *user.User) error {
 	}
 	return nil
 }
+
+// Privileged reports whether the process can change identity and root
+// (effective uid 0). Unprivileged operation is supported for socket
+// activated deployments that start greyd as its service user.
+func Privileged() bool { return os.Geteuid() == 0 }
+
+// SwitchUser drops to u when running as root. When unprivileged it only
+// succeeds if u is the current user; otherwise it returns ErrCannotSwitch
+// so callers can decide whether to continue as the current user.
+func SwitchUser(u *user.User) error {
+	uid, _, err := IDs(u)
+	if err != nil {
+		return err
+	}
+	if !Privileged() && uid != os.Geteuid() {
+		return fmt.Errorf("%w: %s (running as uid %d)", ErrCannotSwitch, u.Username, os.Geteuid())
+	}
+	return Drop(u)
+}
+
+// ErrCannotSwitch is returned by SwitchUser when the process lacks the
+// privilege to become the requested user.
+var ErrCannotSwitch = errors.New("cannot switch user without privileges")
 
 // Chroot changes the root directory. Time zone information is loaded first
 // so that log timestamps stay correct afterwards (the C code calls tzset).

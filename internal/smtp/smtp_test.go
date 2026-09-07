@@ -517,6 +517,228 @@ func TestProxyProtocolDialogue(t *testing.T) {
 	}
 }
 
+// proxyV2 builds a proxy protocol v2 header.
+func proxyV2(cmd, fam byte, addrs []byte) []byte {
+	b := append([]byte(nil), ProxyV2Signature...)
+	b = append(b, 0x20|cmd, fam, byte(len(addrs)>>8), byte(len(addrs)))
+	return append(b, addrs...)
+}
+
+// proxyV2Addrs encodes a TCP address block for the given family.
+func proxyV2Addrs(src, dst string, sport, dport uint16) []byte {
+	s, d := netip.MustParseAddr(src), netip.MustParseAddr(dst)
+	b := append(s.AsSlice(), d.AsSlice()...)
+	return append(b, byte(sport>>8), byte(sport), byte(dport>>8), byte(dport))
+}
+
+func TestProxyProtocolV2(t *testing.T) {
+	v4 := proxyV2Addrs("1.2.3.4", "5.6.7.8", 4000, 25)
+	v6 := proxyV2Addrs("2001:db8::1", "2001:db8::2", 4000, 25)
+	tlv := append(append([]byte(nil), v4...), 0x03, 0x00, 0x04, 0xde, 0xad, 0xbe, 0xef) // PP2_TYPE_CRC32C
+	big := proxyV2(0x01, 0x11, make([]byte, MaxProxyV2Length+1))
+	cases := []struct {
+		name     string
+		hdr      []byte
+		src, dst string
+		local    bool
+		err      error
+	}{
+		{"ipv4", proxyV2(0x01, 0x11, v4), "1.2.3.4", "5.6.7.8", false, nil},
+		{"ipv6", proxyV2(0x01, 0x21, v6), "2001:db8::1", "2001:db8::2", false, nil},
+		{"tlvs skipped", proxyV2(0x01, 0x11, tlv), "1.2.3.4", "5.6.7.8", false, nil},
+		{"local unspec", proxyV2(0x00, 0x00, nil), "", "", true, nil},
+		{"local with addresses", proxyV2(0x00, 0x11, v4), "", "", true, nil},
+		{"unspec", proxyV2(0x01, 0x00, nil), "", "", false, ErrProxyUnknown},
+		{"udp4", proxyV2(0x01, 0x12, v4), "", "", false, ErrProxyUnknown},
+		{"udp6", proxyV2(0x01, 0x22, v6), "", "", false, ErrProxyUnknown},
+		{"unix stream", proxyV2(0x01, 0x31, make([]byte, 216)), "", "", false, ErrProxyUnknown},
+		{"unix dgram", proxyV2(0x01, 0x32, make([]byte, 216)), "", "", false, ErrProxyUnknown},
+		{"bad family", proxyV2(0x01, 0x41, v4), "", "", false, ErrProxyInvalid},
+		{"bad protocol", proxyV2(0x01, 0x13, v4), "", "", false, ErrProxyInvalid},
+		{"bad command", proxyV2(0x02, 0x11, v4), "", "", false, ErrProxyInvalid},
+		{"bad version", append(append([]byte(nil), ProxyV2Signature...), 0x10, 0x11, 0x00, 0x0c, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 0, 2), "", "", false, ErrProxyInvalid},
+		{"bad signature", append([]byte("\r\n\r\n\x00\r\nQUIT\r"), proxyV2(0x01, 0x11, v4)[12:]...), "", "", false, ErrProxyInvalid},
+		{"v1 text", []byte("PROXY TCP4 1.2.3.4 5.6.7.8 1 2\r\n"), "", "", false, ErrProxyInvalid},
+		{"empty", nil, "", "", false, ErrProxyInvalid},
+		{"truncated signature", ProxyV2Signature[:8], "", "", false, ErrProxyInvalid},
+		{"truncated fixed header", proxyV2(0x01, 0x11, v4)[:15], "", "", false, ErrProxyInvalid},
+		{"truncated addresses", proxyV2(0x01, 0x11, v4)[:20], "", "", false, ErrProxyInvalid},
+		{"short ipv4 block", proxyV2(0x01, 0x11, v4[:8]), "", "", false, ErrProxyInvalid},
+		{"short ipv6 block", proxyV2(0x01, 0x21, v6[:32]), "", "", false, ErrProxyInvalid},
+		{"trailing bytes", append(proxyV2(0x01, 0x11, v4), 'E', 'H'), "", "", false, ErrProxyInvalid},
+		{"length too large", big, "", "", false, ErrProxyInvalid},
+	}
+	for _, tc := range cases {
+		src, dst, local, err := ParseProxyHeaderV2(tc.hdr)
+		if !errors.Is(err, tc.err) {
+			t.Fatalf("%s: err %v want %v", tc.name, err, tc.err)
+		}
+		if err != nil {
+			continue
+		}
+		if local != tc.local {
+			t.Fatalf("%s: local %v want %v", tc.name, local, tc.local)
+		}
+		if local && (src.IsValid() || dst.IsValid()) {
+			t.Fatalf("%s: LOCAL carried addresses %v %v", tc.name, src, dst)
+		}
+		if !local && (src.String() != tc.src || dst.String() != tc.dst) {
+			t.Fatalf("%s: %s %s", tc.name, src, dst)
+		}
+	}
+}
+
+func TestProxyProtocolV2Dialogue(t *testing.T) {
+	h := newHarness(t, 100, 100)
+	h.cfg.Stutter = 0
+	h.cfg.ProxyProtocol = true
+	h.cfg.PermittedProxies = blacklist.New("permitted-proxies", "", blacklist.StorageList)
+	_ = h.cfg.PermittedProxies.Add("127.0.0.0/8")
+	proxy := netip.MustParseAddrPort("127.0.0.1:5555")
+	local := netip.MustParseAddrPort("127.0.0.1:8025")
+
+	// Permitted proxy: the real client (blacklisted 10.10.10.1) is used.
+	client, server := net.Pipe()
+	c := NewConn(server, proxy, local, h.cfg, h.deps, h.counters)
+	done := make(chan struct{})
+	go func() { c.Serve(); close(done) }()
+	br := newLineReader(client)
+	hdr := proxyV2(0x01, 0x11, proxyV2Addrs("10.10.10.1", "10.0.0.25", 4000, 25))
+	send(t, client, string(hdr))
+	expect(t, br, "220 greyd.org")
+	if c.SrcAddr != "10.10.10.1" || c.DstAddr != "10.0.0.25" {
+		t.Fatalf("proxied addresses %q %q", c.SrcAddr, c.DstAddr)
+	}
+	if !c.IsBlacklisted() || len(c.Lists) != 2 {
+		t.Fatal("blacklists must be matched against the proxied client")
+	}
+	if _, bl, _, _ := h.counters.Snapshot(); bl != 1 {
+		t.Fatalf("black clients %d", bl)
+	}
+	send(t, client, "QUIT\r\n")
+	expect(t, br, "221 greyd.org")
+	<-done
+	_ = client.Close()
+	if _, bl, _, _ := h.counters.Snapshot(); bl != 0 {
+		t.Fatalf("black clients after close %d", bl)
+	}
+
+	// IPv6 addresses with TLVs, and the header split across writes.
+	client, server = net.Pipe()
+	c = NewConn(server, proxy, local, h.cfg, h.deps, h.counters)
+	done = make(chan struct{})
+	go func() { c.Serve(); close(done) }()
+	br = newLineReader(client)
+	addrs := proxyV2Addrs("2001::fad3:1", "2001:db8::25", 4000, 25)
+	addrs = append(addrs, 0x03, 0x00, 0x04, 0xde, 0xad, 0xbe, 0xef)
+	hdr = proxyV2(0x01, 0x21, addrs)
+	for _, part := range [][]byte{hdr[:5], hdr[5:14], hdr[14:40], hdr[40:]} {
+		send(t, client, string(part))
+	}
+	expect(t, br, "220 greyd.org")
+	if c.SrcAddr != "2001::fad3:1" || c.DstAddr != "2001:db8::25" {
+		t.Fatalf("proxied addresses %q %q", c.SrcAddr, c.DstAddr)
+	}
+	if !c.IsBlacklisted() || len(c.Lists) != 2 {
+		t.Fatal("blacklists must be matched against the proxied IPv6 client")
+	}
+	send(t, client, "QUIT\r\n")
+	expect(t, br, "221 greyd.org")
+	<-done
+	_ = client.Close()
+
+	// LOCAL: the connection's own addresses stand, and the dialogue
+	// continues with the command that followed the header in the same
+	// write (the header is read exactly, the command must not be swallowed
+	// with it). The write is asynchronous as the pipe is unbuffered and the
+	// banner goes out before the command is consumed.
+	client, server = net.Pipe()
+	c = NewConn(server, proxy, local, h.cfg, h.deps, h.counters)
+	done = make(chan struct{})
+	go func() { c.Serve(); close(done) }()
+	br = newLineReader(client)
+	sent := make(chan error, 1)
+	go func() {
+		_, err := io.WriteString(client, string(proxyV2(0x00, 0x00, nil))+"EHLO a\r\n")
+		sent <- err
+	}()
+	expect(t, br, "220 greyd.org")
+	if err := <-sent; err != nil {
+		t.Fatalf("send LOCAL header: %v", err)
+	}
+	if c.SrcAddr != "127.0.0.1" || c.DstAddr != "" || c.IsBlacklisted() {
+		t.Fatalf("LOCAL addresses %q %q black=%v", c.SrcAddr, c.DstAddr, c.IsBlacklisted())
+	}
+	expect(t, br, "250 greyd.org")
+	send(t, client, "QUIT\r\n")
+	expect(t, br, "221 greyd.org")
+	<-done
+	_ = client.Close()
+
+	// Non-permitted proxy: rejected with the error reply.
+	client, server = net.Pipe()
+	c = NewConn(server, netip.MustParseAddrPort("192.0.2.1:5555"), local, h.cfg, h.deps, h.counters)
+	done = make(chan struct{})
+	go func() { c.Serve(); close(done) }()
+	br = newLineReader(client)
+	send(t, client, string(proxyV2(0x01, 0x11, proxyV2Addrs("10.10.10.9", "10.0.0.25", 4000, 25))))
+	expect(t, br, "451 Temporary failure")
+	<-done
+	_ = client.Close()
+
+	// UNSPEC family and a malformed header: rejected.
+	for _, hdr := range [][]byte{
+		proxyV2(0x01, 0x00, nil),
+		proxyV2(0x01, 0x11, proxyV2Addrs("10.10.10.9", "10.0.0.25", 4000, 25)[:8]),
+	} {
+		client, server = net.Pipe()
+		c = NewConn(server, proxy, local, h.cfg, h.deps, h.counters)
+		done = make(chan struct{})
+		go func() { c.Serve(); close(done) }()
+		br = newLineReader(client)
+		send(t, client, string(hdr))
+		expect(t, br, "451 Temporary failure")
+		<-done
+		_ = client.Close()
+	}
+
+	// An oversized length is refused before the block is read.
+	client, server = net.Pipe()
+	c = NewConn(server, proxy, local, h.cfg, h.deps, h.counters)
+	done = make(chan struct{})
+	go func() { c.Serve(); close(done) }()
+	hdr = append(append([]byte(nil), ProxyV2Signature...), 0x21, 0x11, 0xff, 0xff)
+	send(t, client, string(hdr))
+	<-done
+	if !c.Closed() {
+		t.Fatal("oversized v2 header must close the connection")
+	}
+	_ = client.Close()
+
+	// Proxied greylisted client: dst_ip comes from the header.
+	client, server = net.Pipe()
+	c = NewConn(server, proxy, local, h.cfg, h.deps, h.counters)
+	done = make(chan struct{})
+	go func() { c.Serve(); close(done) }()
+	br = newLineReader(client)
+	send(t, client, string(proxyV2(0x01, 0x11, proxyV2Addrs("10.10.10.9", "192.0.2.99", 4000, 25))))
+	expect(t, br, "220 ")
+	send(t, client, "EHLO a\r\n")
+	expect(t, br, "250 greyd.org")
+	send(t, client, "MAIL FROM:<a@b>\r\n")
+	expect(t, br, "250 OK")
+	send(t, client, "RCPT TO:<c@d>\r\n")
+	expect(t, br, "250 OK")
+	send(t, client, "QUIT\r\n")
+	expect(t, br, "221 ")
+	<-done
+	_ = client.Close()
+	m, err := ipc.NewReader(bytes.NewReader(h.greyOut.Bytes())).Next()
+	if g, ok := m.(*ipc.GreyMessage); err != nil || !ok || g.DstIP != "192.0.2.99" || g.Tuple.IP != "10.10.10.9" {
+		t.Fatalf("proxied grey message: %v %s", err, h.greyOut.String())
+	}
+}
+
 func TestProxyHeaderBounded(t *testing.T) {
 	long := "PROXY TCP4 1.1.1.1 2.2.2.2 1 2" + strings.Repeat(" ", MaxProxyHeader)
 	if _, _, err := ParseProxyHeader(long); !errors.Is(err, ErrProxyInvalid) {

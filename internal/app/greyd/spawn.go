@@ -108,9 +108,18 @@ func spawnChildren(ctx context.Context, _ *settings.Settings, log *slog.Logger) 
 		}
 	}
 
+	reload := func() {
+		for _, c := range []*exec.Cmd{fwCmd, greyCmd} {
+			if c.Process != nil {
+				_ = c.Process.Signal(syscall.SIGHUP)
+			}
+		}
+	}
+
 	return &children{
 		files:  mainFiles{greyOut: greyW, fwOut: fwW, natIn: natR, trapIn: trapR},
 		exited: exited,
 		stop:   stop,
+		reload: reload,
 	}, nil
 }

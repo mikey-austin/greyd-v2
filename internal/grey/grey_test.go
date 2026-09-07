@@ -482,8 +482,17 @@ func TestRunScannerAndIPv6(t *testing.T) {
 	if !reflect.DeepEqual(names, []string{WhiteName, WhiteNameV6}) {
 		t.Fatalf("frames %v", names)
 	}
-	if trapOut.Len() != 0 {
-		t.Fatal("empty traplist must not be sent")
+	// An empty traplist is not sent; the scan statistics are.
+	tm, err := ipc.NewReader(bytes.NewReader(trapOut.Bytes())).Next()
+	if err != nil {
+		t.Fatalf("trap pipe: %v", err)
+	}
+	sc, ok := tm.(*ipc.ScanStats)
+	if !ok || sc.White != 2 || sc.At == 0 {
+		t.Fatalf("expected scan statistics with two white entries on the trap pipe, got %+v", tm)
+	}
+	if _, err := ipc.NewReader(bytes.NewReader(trapOut.Bytes()[len(trapOut.Bytes()):])).Next(); err == nil {
+		t.Fatal("unexpected extra trap pipe frame")
 	}
 	if !strings.Contains(string(fwOut.Bytes()), "2001::1") {
 		t.Fatal("v6 whitelist missing")

@@ -52,6 +52,9 @@ func (d *daemon) serve(ctx context.Context, start childStarter) error {
 	if err != nil {
 		return err
 	}
+	if kids != nil && kids.reload != nil {
+		d.reload = kids.reload
+	}
 	d.counters = smtp.NewCounters(d.maxCons, d.maxBlack)
 	syncer, syncRecv := d.startSync()
 
@@ -169,16 +172,30 @@ func (d *daemon) startSync() (*gsync.Engine, bool) {
 }
 
 // confine chroots and drops privileges according to the configuration.
+// Started without root (socket activation as the service user) the
+// chroot is skipped with a warning and the user must already match.
 func (d *daemon) confine(pw *user.User) error {
-	if d.s.Chroot {
-		d.chroot = d.s.ChrootDir
-		if err := privs.Chroot(d.chroot); err != nil {
-			return err
+	return confine(d.s.Chroot, d.s.ChrootDir, d.s.DropPrivs, pw, d.log, &d.chroot)
+}
+
+// confine is shared by the main and firewall processes.
+func confine(chroot bool, dir string, dropPrivs bool, pw *user.User, log *slog.Logger, applied *string) error {
+	if chroot {
+		if err := privs.Chroot(dir); err != nil {
+			if privs.Privileged() {
+				return err
+			}
+			log.Warn("running unprivileged: chroot skipped", "dir", dir, "err", err)
+		} else if applied != nil {
+			*applied = dir
 		}
 	}
-	if d.s.DropPrivs {
-		if err := privs.Drop(pw); err != nil {
-			return fmt.Errorf("failed to drop privileges: %w", err)
+	if dropPrivs {
+		if err := privs.SwitchUser(pw); err != nil {
+			if !errors.Is(err, privs.ErrCannotSwitch) {
+				return fmt.Errorf("failed to drop privileges: %w", err)
+			}
+			log.Warn("running unprivileged: continuing as the current user", "wanted", pw.Username)
 		}
 	}
 	return nil
@@ -191,7 +208,7 @@ func (d *daemon) sandbox() {
 	if !d.s.Sandbox {
 		return
 	}
-	p := sandbox.Profile{Role: sandbox.RoleMain}
+	p := sandbox.Profile{Role: sandbox.RoleMain, Strict: d.s.SandboxStrict}
 	if !d.s.Chroot {
 		p.WritePaths = append(p.WritePaths, filepath.Dir(d.pidfile.Path()))
 		if d.s.ConfigSocket != "" {

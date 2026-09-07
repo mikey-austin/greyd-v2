@@ -1,0 +1,24 @@
+# greyd-config.socket - generated from packages/systemd/greyd-config.socket.in
+# by make.
+#
+# The configuration socket for socket activated greyd: greyd-setup and
+# greyd-monitor connect here. Peer credentials restrict callers to root and
+# the greyd user; the file mode restricts them further.
+
+[Unit]
+Description=greyd configuration socket
+Documentation=man:greyd(8) man:greyd-setup(8)
+Conflicts=greyd.service
+
+[Socket]
+ListenStream=/run/greyd/config.sock
+FileDescriptorName=config
+SocketMode=0600
+SocketUser=greyd
+SocketGroup=greyd
+DirectoryMode=0755
+RemoveOnStop=true
+Service=greyd-unprivileged.service
+
+[Install]
+WantedBy=sockets.target

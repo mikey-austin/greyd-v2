@@ -1,0 +1,44 @@
+# greyd-monitor.service - generated from packages/systemd/greyd-monitor.service.in
+# by make.
+#
+# greyd-monitor polls greyd over its configuration socket and serves
+# Prometheus metrics on 127.0.0.1:9143 by default (section "monitor" in
+# greyd.conf(5)). It runs as the greyd user, which the unix configuration
+# socket admits; with the TCP configuration port it would need root to
+# bind a reserved source port, so set config_socket in greyd.conf.
+
+[Unit]
+Description=greyd Prometheus exporter
+Documentation=man:greyd-monitor(8) man:greyd.conf(5)
+After=greyd.service
+Wants=greyd.service
+
+[Service]
+Type=simple
+ExecStart=@sbindir@/greyd-monitor -F -f @DEFAULT_CONFIG@
+Restart=on-failure
+RestartSec=5
+User=greyd
+Group=greyd
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+ProtectSystem=strict
+ReadWritePaths=-@localstatedir@/log -/var/log
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

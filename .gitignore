@@ -10,3 +10,7 @@ etc/*-init
 *~
 packages/systemd/*.service
 packages/systemd/*.timer
+cover.out
+coverage.html
+packages/nfpm/stage/
+packages/systemd/*.socket

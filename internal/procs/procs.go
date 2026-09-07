@@ -74,6 +74,7 @@ func (s Spawn) Start() (*exec.Cmd, error) {
 
 	env := append([]string{}, os.Environ()...)
 	env = filterEnv(env, EnvRole, envFDPrefix)
+	env = filterEnv(env, "LISTEN_PID", "LISTEN_")
 	env = append(env, EnvRole+"="+s.Role)
 	for i, n := range names {
 		cmd.ExtraFiles = append(cmd.ExtraFiles, s.Files[n])

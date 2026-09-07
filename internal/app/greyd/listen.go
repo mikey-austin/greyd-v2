@@ -27,6 +27,8 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/mikey-austin/greyd-golang/internal/activation"
 )
 
 func reuseAddr(_, _ string, c syscall.RawConn) error {
@@ -39,10 +41,19 @@ func reuseAddr(_, _ string, c syscall.RawConn) error {
 	return serr
 }
 
-// bind creates the listening sockets while still privileged.
+// bind creates the listening sockets while still privileged, or adopts
+// the ones a service manager passed in (socket activation).
 func (d *daemon) bind() error {
 	s := d.s
 	lc := net.ListenConfig{Control: reuseAddr}
+
+	activated, err := activation.Listeners()
+	if err != nil {
+		return fmt.Errorf("socket activation: %w", err)
+	}
+	if len(activated) > 0 {
+		return d.adopt(activated, lc)
+	}
 
 	if s.BindAddress != "" {
 		if a, err := netip.ParseAddr(s.BindAddress); err != nil || !a.Is4() {
@@ -76,6 +87,62 @@ func (d *daemon) bind() error {
 		return err
 	}
 	d.cfgLn = cfgLn
+	return nil
+}
+
+// adopt assigns activated sockets by their FileDescriptorName ("smtp",
+// "smtp6", "config") or, unnamed, by kind: TCP listeners in order to the
+// SMTP ports and a unix listener to the configuration socket. Anything
+// not supplied is bound as usual.
+func (d *daemon) adopt(ls []activation.Listener, lc net.ListenConfig) error {
+	closeAll := func() {
+		for _, l := range ls {
+			_ = l.Close()
+		}
+	}
+	for _, l := range ls {
+		name := l.Name
+		if name == "" {
+			switch a := l.Addr().(type) {
+			case *net.UnixAddr:
+				name = "config"
+			case *net.TCPAddr:
+				name = "smtp"
+				if a.IP.To4() == nil && d.mainLn != nil {
+					name = "smtp6"
+				}
+			}
+		}
+		switch name {
+		case "smtp":
+			if d.mainLn != nil {
+				closeAll()
+				return errors.New("socket activation: more than one smtp socket")
+			}
+			d.mainLn = l.Listener
+		case "smtp6":
+			d.main6Ln = l.Listener
+		case "config":
+			d.cfgLn = l.Listener
+			_, d.cfgUnix = l.Addr().(*net.UnixAddr)
+		default:
+			closeAll()
+			return fmt.Errorf("socket activation: unknown socket name %q", l.Name)
+		}
+		d.log.Info("adopted activated socket", "name", name, "addr", l.Addr().String())
+	}
+	if d.mainLn == nil {
+		closeAll()
+		return errors.New("socket activation: no smtp socket was passed")
+	}
+	if d.cfgLn == nil {
+		cfgLn, err := d.bindConfig(lc)
+		if err != nil {
+			closeAll()
+			return err
+		}
+		d.cfgLn = cfgLn
+	}
 	return nil
 }
 

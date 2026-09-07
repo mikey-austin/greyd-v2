@@ -1,0 +1,137 @@
+.\" hand written; regenerate from greyd-monitor.8.md with ronn when available
+.
+.TH "GREYD\-MONITOR" "8" "September 2026" "" ""
+.
+.SH "NAME"
+\fBgreyd\-monitor\fR \- Prometheus exporter for greyd
+.
+.SH "SYNOPSIS"
+\fBgreyd\-monitor\fR [\fB\-dFV\fR] [\fB\-f\fR config] [\fB\-l\fR address] [\fB\-p\fR port] [\fB\-i\fR seconds]
+.
+.SH "DESCRIPTION"
+\fBgreyd\-monitor\fR polls a running \fBgreyd\fR(8) for its operational counters and serves them in the Prometheus text exposition format, so that greylisting activity, connection load, blacklist sizes and database growth can be graphed and alerted on\.
+.
+.P
+It asks \fBgreyd\fR for its statistics over the configuration socket (see \fICONFIGURATION CONNECTIONS\fR in \fBgreyd\fR(8)) every \fIinterval\fR seconds and keeps the last answer\. Scrapes are served from memory, so a slow or unresponsive \fBgreyd\fR never slows down the scraper; \fBgreyd_up\fR reports whether the last poll succeeded\.
+.
+.P
+The options are as follows:
+.
+.TP
+\fB\-f\fR \fIconfig\fR
+The main greyd configuration file\. The \fImonitor\fR section and the \fIconfig_socket\fR / \fIconfig_port\fR variables are read from it; see \fBgreyd\.conf\fR(5)\.
+.
+.TP
+\fB\-l\fR \fIaddress\fR
+The address to serve metrics on (overrides \fImonitor\.bind_address\fR, default \fI127\.0\.0\.1\fR)\.
+.
+.TP
+\fB\-p\fR \fIport\fR
+The port to serve metrics on (overrides \fImonitor\.port\fR, default \fI9143\fR)\.
+.
+.TP
+\fB\-i\fR \fIseconds\fR
+How often to poll \fBgreyd\fR (overrides \fImonitor\.interval\fR, default \fI30\fR)\.
+.
+.TP
+\fB\-d\fR
+Debugging mode\. \fBgreyd\-monitor\fR displays debug messages (suppressed by default)\.
+.
+.TP
+\fB\-F\fR
+Run in the foreground instead of detaching (the \fIdaemonize\fR option)\.
+.
+.TP
+\fB\-V\fR
+Print the version and exit\.
+.
+.SH "ENDPOINTS"
+.
+.TP
+\fI/metrics\fR
+The metrics, in the Prometheus text format\.
+.
+.TP
+\fI/healthz\fR
+Returns \fI200\fR when the last poll of \fBgreyd\fR succeeded and \fI503\fR otherwise, for load balancer or container health checks\.
+.
+.SH "METRICS"
+All metrics are prefixed \fBgreyd_\fR\. Counters are cumulative since \fBgreyd\fR started; gauges are instantaneous\. Database entry gauges are taken from the greylister\'s periodic database scan and are omitted until the first scan has completed\.
+.
+.TP
+\fBgreyd_up\fR
+1 when the last poll succeeded\.
+.
+.TP
+\fBgreyd_uptime_seconds\fR
+Seconds since \fBgreyd\fR started\.
+.
+.TP
+\fBgreyd_greylisting_enabled\fR
+0 when \fBgreyd\fR runs in blacklist\-only mode\.
+.
+.TP
+\fBgreyd_connections{state="all"|"black"}\fR, \fBgreyd_max_connections{state=\.\.\.}\fR
+Currently open SMTP connections, and the configured limits (\fImax_cons\fR, \fImax_cons_black\fR)\.
+.
+.TP
+\fBgreyd_connections_total{result="accepted"|"accepted_black"|"refused_full"|"refused_source"}\fR
+Connections accepted (and how many of those were blacklisted on arrival), and connections closed on accept because the global or the per\-source limit was reached\.
+.
+.TP
+\fBgreyd_greylist_tuples_total\fR
+Envelopes (client, HELO, sender, recipient) handed to the greylister\.
+.
+.TP
+\fBgreyd_replies_total{kind="grey"|"black"}\fR
+Final rejections sent: the temporary failure to greylisted clients, or a blacklist message\.
+.
+.TP
+\fBgreyd_proxy_headers_total\fR
+Accepted PROXY protocol headers\.
+.
+.TP
+\fBgreyd_db_entries{type="grey"|"white"|"trapped"|"spamtrap"|"domain"}\fR, \fBgreyd_db_scan_age_seconds\fR
+Database entries by kind at the last scan, and how long ago that scan ran\.
+.
+.TP
+\fBgreyd_blacklist_entries{name=\.\.\.}\fR
+Entries in each blacklist loaded through \fBgreyd\-setup\fR(8) or the greytrap\.
+.
+.TP
+\fBgreyd_monitor_polls_total{result="ok"|"error"}\fR, \fBgreyd_monitor_poll_duration_seconds\fR, \fBgreyd_monitor_last_poll_timestamp_seconds\fR, \fBgreyd_monitor_build_info{version=\.\.\.}\fR
+The exporter\'s own health\.
+.
+.SH "PRIVILEGES"
+\fBgreyd\-monitor\fR needs no privileges other than access to the configuration socket\. With \fIconfig_socket\fR set, \fBgreyd\fR admits the super user and the user it runs as (the \fIuser\fR option), so run \fBgreyd\-monitor\fR as that user; when started as root it drops to \fImonitor\.user\fR, or to \fIuser\fR when that is unset\. With the loopback TCP configuration port, \fBgreyd\fR requires a reserved source port and \fBgreyd\-monitor\fR must then run as root, so \fIconfig_socket\fR is recommended\. Each process confines itself after start up when the \fIsandbox\fR option is on\.
+.
+.P
+A scrape configuration for Prometheus:
+.
+.IP "" 4
+.
+.nf
+scrape_configs:
+  \- job_name: greyd
+    static_configs:
+      \- targets: [\'mx\.example\.org:9143\']
+.
+.fi
+.
+.IP "" 0
+.
+.P
+The same counters can be printed on the command line with \fBgreyd \-\-stats\fR, and the database counts alone with \fBgreydb \-s\fR\.
+.
+.SH "COPYRIGHT"
+\fBgreyd\-monitor\fR is Copyright (C) 2014\-2026 Mikey Austin (greyd\.org)\. All rights reserved\.
+.
+.SH "SEE ALSO"
+greyd\.conf(5), greyd(8), greydb(8), greyd\-setup(8), greylogd(8)
+.
+.SH "CREDITS"
+.
+.IP "\(bu" 4
+Mikey Austin
+.
+.IP "" 0

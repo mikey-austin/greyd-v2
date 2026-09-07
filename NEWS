@@ -15,6 +15,22 @@
         the programs share a typed configuration schema, structured logging,
         transactional database and context-aware firewall interfaces, and a
         hand-written codec for the internal message frames.
+        The PROXY protocol handler accepts version 2 (binary) headers as
+        well as version 1.
+
+        Observability: greyd answers a statistics request on its
+        configuration socket; greyd --stats prints the counters, greydb -s
+        summarises the database, and the new greyd-monitor(8) program
+        exports everything to Prometheus. SIGHUP reopens the log files.
+        greyd adopts sockets passed by systemd (socket activation) and can
+        run entirely without root; greyd.socket, greyd-config.socket and
+        greyd-unprivileged.service are installed for that. The sandbox
+        gained an opt-in seccomp allow list (sandbox_strict) and, on kernels
+        with Landlock ABI 4, TCP connect rules that limit the greylister to
+        DNS and its database server. Packages (deb, rpm), signed release
+        archives with SBOMs, a coverage gate, Dependabot, an architecture
+        document and an end to end integration harness (Linux container
+        and OpenBSD VM) round out the tooling.
 
 2026-09-06
         greyd has been ported from C to Go. The four programs, their command

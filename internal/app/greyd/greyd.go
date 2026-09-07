@@ -26,6 +26,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/mikey-austin/greyd-golang/internal/config"
 	"github.com/mikey-austin/greyd-golang/internal/core"
@@ -33,6 +34,7 @@ import (
 	"github.com/mikey-austin/greyd-golang/internal/privs"
 	"github.com/mikey-austin/greyd-golang/internal/procs"
 	"github.com/mikey-austin/greyd-golang/internal/settings"
+	"github.com/mikey-austin/greyd-golang/internal/stats"
 	"github.com/mikey-austin/greyd-golang/internal/version"
 )
 
@@ -82,8 +84,11 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if o.TestConfig {
 		return checkConfig(s, o.ConfigFile, stdout)
 	}
+	if o.ShowStats {
+		return showStats(s, stdout, stderr)
+	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	signal.Ignore(syscall.SIGPIPE)
 
@@ -91,6 +96,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case RoleFirewall:
 		log, h := newLogger(s, stderr)
 		defer func() { _ = h.Close() }()
+		defer onHangup(ctx, s, h, log, nil)()
 		files, err := inheritedFwFiles()
 		if err != nil {
 			log.Error(err.Error())
@@ -105,6 +111,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case RoleGrey:
 		log, h := newLogger(s, stderr)
 		defer func() { _ = h.Close() }()
+		defer onHangup(ctx, s, h, log, nil)()
 		files, err := inheritedGreyFiles()
 		if err != nil {
 			log.Error(err.Error())
@@ -137,6 +144,11 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		log.Error(err.Error())
 		return 1
 	}
+	defer onHangup(ctx, s, h, log, func() {
+		if d.reload != nil {
+			d.reload()
+		}
+	})()
 	if err := d.bind(); err != nil {
 		log.Error(err.Error())
 		return 1
@@ -223,4 +235,50 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// onHangup makes SIGHUP reopen the log file (for rotation) and run the
+// optional hook; it returns a function that stops listening.
+func onHangup(ctx context.Context, s *settings.Settings, h *logger.Handler, log *slog.Logger, then func()) func() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGHUP)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ch:
+				if s.LogToFile != "" {
+					if err := h.Reopen(s.LogToFile); err != nil {
+						log.Warn("could not reopen log file", "err", err)
+					} else {
+						log.Info("log file reopened")
+					}
+				}
+				if then != nil {
+					then()
+				}
+			case <-ctx.Done():
+				return
+			case <-done:
+				return
+			}
+		}
+	}()
+	return func() {
+		signal.Stop(ch)
+		close(done)
+	}
+}
+
+// showStats implements --stats: print the counters of the running greyd.
+func showStats(s *settings.Settings, stdout, stderr io.Writer) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	reply, err := stats.Query(ctx, stats.Dialer(s))
+	if err != nil {
+		fmt.Fprintf(stderr, "greyd: %v\n", err)
+		return 1
+	}
+	stats.Format(stdout, reply)
+	return 0
 }

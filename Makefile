@@ -41,7 +41,7 @@ GREYLOGD_PIDFILE  ?= $(localstatedir)/empty/greylogd/greylogd.pid
 GREYD_PIDDIR      := $(patsubst %/,%,$(dir $(GREYD_PIDFILE)))
 GREYLOGD_PIDDIR   := $(patsubst %/,%,$(dir $(GREYLOGD_PIDFILE)))
 
-PROGRAMS       := greyd greydb greyd-setup greylogd
+PROGRAMS       := greyd greydb greyd-setup greylogd greyd-monitor
 BINDIR         := bin
 
 ANTLR_VERSION  := 4.13.1
@@ -82,9 +82,12 @@ CONF_FILES     := etc/greyd.conf etc/greyd.docker.conf etc/greyd.redhat-init \
 
 UNIT_DIR       := packages/systemd
 UNIT_FILES     := $(UNIT_DIR)/greyd.service $(UNIT_DIR)/greylogd.service \
-                  $(UNIT_DIR)/greyd-setup.service $(UNIT_DIR)/greyd-setup.timer
+                  $(UNIT_DIR)/greyd-setup.service $(UNIT_DIR)/greyd-setup.timer \
+                  $(UNIT_DIR)/greyd-monitor.service \
+                  $(UNIT_DIR)/greyd.socket $(UNIT_DIR)/greyd-config.socket \
+                  $(UNIT_DIR)/greyd-unprivileged.service
 
-MAN8          := doc/greyd.8 doc/greylogd.8 doc/greydb.8 doc/greyd-setup.8
+MAN8           := doc/greyd.8 doc/greylogd.8 doc/greydb.8 doc/greyd-setup.8 doc/greyd-monitor.8
 MAN5           := doc/greyd.conf.5
 
 .PHONY: all build $(PROGRAMS) generate test test-race test-db-docker fuzz lint fmt vet man \
@@ -221,3 +224,6 @@ clean:
 
 distclean: clean
 	rm -rf .tools
+
+# Packaging, release and coverage helpers.
+include packages/release.mk

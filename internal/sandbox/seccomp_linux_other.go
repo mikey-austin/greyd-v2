@@ -20,6 +20,7 @@ package sandbox
 
 // Other architectures get Landlock and no-new-privs only.
 var (
-	seccompArch    uint32
-	deniedSyscalls []uint32
+	seccompArch     uint32
+	deniedSyscalls  []uint32
+	allowedSyscalls []uint32
 )
