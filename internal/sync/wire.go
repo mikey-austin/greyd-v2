@@ -58,7 +58,10 @@ const (
 const (
 	hdrLen     = 32 // version, af, length, counter, hmac[20], pad[4]
 	tlvHdrLen  = 4
-	greyHdrLen = 20 // type, length, timestamp, ip, fromlen, tolen, helolen
+	// greyHdrLen is sizeof(struct spam_synctlv_grey), which is packed:
+	// type, length, timestamp, ip, fromlen, tolen, helolen. The strings
+	// follow immediately.
+	greyHdrLen = 18
 	addrLen    = 16 // type, length, timestamp, expire, ip
 	endLen     = 4
 )

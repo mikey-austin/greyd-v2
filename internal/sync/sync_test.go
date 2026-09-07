@@ -26,7 +26,7 @@ func TestGreyRoundTrip(t *testing.T) {
 	ip := netip.MustParseAddr("192.0.2.7")
 	pkt := EncodeGrey(&k, 5, ip, "mx.example.org", "a@b.c", "d@e.f", 1700000000)
 
-	// 32 header + align16(20 + 6 + 6 + 15) + 4 end
+	// 32 header + align16(18 + 6 + 6 + 15) + 4 end
 	strings := len("a@b.c") + 1 + len("d@e.f") + 1 + len("mx.example.org") + 1
 	want := hdrLen + align(greyHdrLen+strings) + endLen
 	if len(pkt) != want {

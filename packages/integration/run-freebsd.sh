@@ -139,7 +139,7 @@ cleanup() {
         ipfw -q table "$t" destroy 2>/dev/null || true
     done
     for a in $ALIASES; do ifconfig lo0 "$a" -alias 2>/dev/null || true; done
-    rm -f "$SOCK" "$CHROOT/greyd.pid" "$CHROOT/greylogd.pid"
+    rm -f "$SOCK" "$RUNDIR/greyd.pid" "$RUNDIR/greylogd.pid"
     exit "$rc"
 }
 trap cleanup EXIT
@@ -220,8 +220,11 @@ sandbox        = 1
 bind_address   = "127.0.0.1"
 port           = $SMTP_PORT
 config_socket  = "$SOCK"
-greyd_pidfile  = "$CHROOT/greyd.pid"
-greylogd_pidfile = "$CHROOT/greylogd.pid"
+# /var/empty is immutable (schg) on FreeBSD, so the pidfiles live in the
+# run directory; greyd cannot remove its own from inside the chroot, which
+# is harmless.
+greyd_pidfile  = "$RUNDIR/greyd.pid"
+greylogd_pidfile = "$RUNDIR/greylogd.pid"
 stutter        = 0
 
 section firewall {
@@ -315,9 +318,9 @@ pass "ipfw table $WHITELIST_TABLE lists $PRELOAD_WHITE (swapped in by the firewa
 
 step "greylogd whitelists the source of a logged SYN to port 25"
 "$BIN/greylogd" -f "$CONF" >"$LOGDIR/greylogd.stderr" 2>&1
-GREYLOGD_PID=$(cat "$CHROOT/greylogd.pid" 2>/dev/null || true)
-wait_for "greylogd pidfile" test -s "$CHROOT/greylogd.pid" || die "greylogd did not write its pidfile"
-GREYLOGD_PID=$(cat "$CHROOT/greylogd.pid")
+GREYLOGD_PID=$(cat "$RUNDIR/greylogd.pid" 2>/dev/null || true)
+wait_for "greylogd pidfile" test -s "$RUNDIR/greylogd.pid" || die "greylogd did not write its pidfile"
+GREYLOGD_PID=$(cat "$RUNDIR/greylogd.pid")
 wait_for "greylogd listening" log_has "listening direction" || die "greylogd did not start"
 # Nothing listens on 25: the SYN is logged by the count rule and answered
 # with a reset, which is all greylogd needs.

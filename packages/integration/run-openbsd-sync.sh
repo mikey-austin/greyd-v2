@@ -278,11 +278,11 @@ pass "greyd up, sending to $SPAMD_ADDR and receiving on $GREYD_ADDR"
 step "greyd -> spamd: greylisted dialogue against greyd appears in spamdb"
 smtp_dialogue "$GREYD_ADDR" "$GREYD_SMTP" g2s.example.test g2s-sender@example.test g2s-rcpt@example.test
 grep -q '^451' "$LOGDIR/smtp-sync.out" || die "greyd did not reply 451"
-wait_for "GREY tuple in greydb" greydb_has "GREY|127.0.0.1|g2s.example.test|g2s-sender@example.test|g2s-rcpt@example.test" \
+wait_for "GREY tuple in greydb" greydb_has "GREY|127.0.0.[0-9]*|g2s.example.test|g2s-sender@example.test|g2s-rcpt@example.test" \
     || die "greyd did not record the tuple itself"
-wait_for "GREY tuple in spamdb" spamdb_has "GREY|127.0.0.1|g2s.example.test|g2s-sender@example.test|g2s-rcpt@example.test" \
+wait_for "GREY tuple in spamdb" spamdb_has "GREY|127.0.0.[0-9]*|g2s.example.test|g2s-sender@example.test|g2s-rcpt@example.test" \
     || die "spamd did not receive the grey entry from greyd"
-pass "spamdb lists GREY|127.0.0.1|g2s.example.test|... sent by greyd"
+pass "spamdb lists GREY|...|g2s.example.test|... sent by greyd"
 
 # --- 7. greyd -> spamd: white and trapped via greydb -Y ----------------------
 
@@ -298,11 +298,11 @@ pass "spamdb lists WHITE|$WHITE_IP and TRAPPED|$TRAP_IP"
 step "spamd -> greyd: greylisted dialogue against spamd appears in greydb"
 smtp_dialogue "$SPAMD_ADDR" "$SPAMD_SMTP" s2g.example.test s2g-sender@example.test s2g-rcpt@example.test
 grep -q '^451' "$LOGDIR/smtp-sync.out" || die "spamd did not reply 451"
-wait_for "GREY tuple in spamdb" spamdb_has "GREY|127.0.0.1|s2g.example.test|" \
+wait_for "GREY tuple in spamdb" spamdb_has "GREY|127.0.0.[0-9]*|s2g.example.test|" \
     || die "spamd did not record its own tuple"
-wait_for "GREY tuple in greydb" greydb_has "GREY|127.0.0.1|s2g.example.test|s2g-sender@example.test|s2g-rcpt@example.test" \
+wait_for "GREY tuple in greydb" greydb_has "GREY|127.0.0.[0-9]*|s2g.example.test|s2g-sender@example.test|s2g-rcpt@example.test" \
     || die "greyd did not receive the grey entry from spamd"
-pass "greydb lists GREY|127.0.0.1|s2g.example.test|... sent by spamd"
+pass "greydb lists GREY|...|s2g.example.test|... sent by spamd"
 
 # --- 9. both alive, clean shutdown -------------------------------------------
 

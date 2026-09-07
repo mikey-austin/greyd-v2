@@ -33,7 +33,10 @@
         OpenBSD VM and FreeBSD VM, including a sync protocol compatibility
         test against the spamd of the OpenBSD base system) round out the
         tooling. A native FreeBSD firewall driver, ipfw, joins netfilter
-        and pf. The harness found and fixed
+        and pf. The spamd test caught a wire format bug: the port put the
+        strings of a grey sync entry two bytes after where spamd (and the
+        C greyd) expect them, so grey entries never synchronised with
+        other implementations; white and trapped entries were unaffected. The harness found and fixed
         three defects of the port: the netfilter firewall process crashed
         after dropping privileges (keep-caps was set on one thread only,
         and the capability set was narrowed before the drop), multi-line
