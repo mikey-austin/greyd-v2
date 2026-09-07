@@ -17,6 +17,7 @@ import (
 	_ "github.com/mikey-austin/greyd-v2/adapters/db/all"
 	"github.com/mikey-austin/greyd-v2/adapters/db/memory"
 	_ "github.com/mikey-austin/greyd-v2/adapters/fw/all"
+	"github.com/mikey-austin/greyd-v2/internal/activation"
 	"github.com/mikey-austin/greyd-v2/internal/config"
 	"github.com/mikey-austin/greyd-v2/internal/config/parse"
 	"github.com/mikey-austin/greyd-v2/internal/core"
@@ -542,5 +543,67 @@ func TestStatsOverUnixSocket(t *testing.T) {
 	r.stop()
 	if rc := showStats(cfg, &out, &out); rc == 0 {
 		t.Fatal("--stats against a stopped daemon must fail")
+	}
+}
+
+func TestAdoptActivatedSockets(t *testing.T) {
+	cfg := testConfig(t, "adopt", "")
+	mk := func(network, addr string) net.Listener {
+		ln, err := net.Listen(network, addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		return ln
+	}
+	unixPath := filepath.Join(t.TempDir(), "c.sock")
+
+	// Named sockets are assigned by name; the config socket is recognised
+	// as unix.
+	d, err := newDaemon(cfg, Options{Opts: config.New()}, 800, testLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	smtp, cfgLn := mk("tcp4", "127.0.0.1:0"), mk("unix", unixPath)
+	if err := d.adopt([]activation.Listener{{Name: "smtp", Listener: smtp}, {Name: "config", Listener: cfgLn}}, net.ListenConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if d.mainLn != smtp || d.cfgLn != cfgLn || !d.cfgUnix || d.main6Ln != nil {
+		t.Fatalf("assignment: main=%v cfg=%v unix=%v", d.mainLn.Addr(), d.cfgLn.Addr(), d.cfgUnix)
+	}
+	d.closeListeners()
+
+	// Unnamed sockets are assigned by kind, and a missing config socket
+	// is bound as usual (here the loopback TCP port from the config).
+	d, _ = newDaemon(cfg, Options{Opts: config.New()}, 800, testLog)
+	smtp = mk("tcp4", "127.0.0.1:0")
+	if err := d.adopt([]activation.Listener{{Listener: smtp}}, net.ListenConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if d.mainLn != smtp || d.cfgLn == nil || d.cfgUnix {
+		t.Fatalf("unnamed: main=%v cfg=%v", d.mainLn, d.cfgLn)
+	}
+	d.closeListeners()
+
+	// Errors: two SMTP sockets, an unknown name, no SMTP socket at all.
+	for _, tc := range []struct {
+		name string
+		ls   func() []activation.Listener
+	}{
+		{"two smtp", func() []activation.Listener {
+			return []activation.Listener{{Name: "smtp", Listener: mk("tcp4", "127.0.0.1:0")}, {Name: "smtp", Listener: mk("tcp4", "127.0.0.1:0")}}
+		}},
+		{"unknown", func() []activation.Listener {
+			return []activation.Listener{{Name: "smtp", Listener: mk("tcp4", "127.0.0.1:0")}, {Name: "bogus", Listener: mk("tcp4", "127.0.0.1:0")}}
+		}},
+		{"no smtp", func() []activation.Listener {
+			return []activation.Listener{{Name: "config", Listener: mk("unix", filepath.Join(t.TempDir(), "x.sock"))}}
+		}},
+	} {
+		d, _ = newDaemon(cfg, Options{Opts: config.New()}, 800, testLog)
+		if err := d.adopt(tc.ls(), net.ListenConfig{}); err == nil {
+			d.closeListeners()
+			t.Errorf("%s: expected an error", tc.name)
+		}
 	}
 }

@@ -95,7 +95,7 @@ release-snapshot:
 # Coverage. The threshold and the commands mirror
 # .github/workflows/coverage.yml; the profile is coverage.out (gitignored).
 #
-COVER_MIN     ?= 50
+COVER_MIN     ?= 70
 COVERPROFILE  ?= coverage.out
 
 # -coverpkg attributes statements to the package they live in (so shared

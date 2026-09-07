@@ -337,9 +337,12 @@ now=$(date +%s)
 grace=$((60 - (now - started)))
 [ "$grace" -gt 0 ] && { say "waiting ${grace}s for the low priority MX grace period"; sleep "$grace"; }
 smtp_dialogue "$MX_ALIAS" "$RDR_PORT" mx.example.test >/dev/null
-wait_for "TRAPPED|127.0.0.1" db_has "^TRAPPED|127.0.0.1|" \
-    || die "connecting to $MX_ALIAS through fwd did not trap 127.0.0.1 (original destination lost?)"
-pass "TRAPPED|127.0.0.1 recorded: greyd saw the original destination $MX_ALIAS"
+# The client's source is whichever loopback address it connected to.
+wait_for "TRAPPED entry" db_has "^TRAPPED|127.0.0.[0-9]*|" \
+    || die "connecting to $MX_ALIAS through fwd did not trap the client (original destination lost?)"
+grep -q "trapping for trying the low priority MX first.*mx=$MX_ALIAS" "$LOG" \
+    || die "greyd did not see $MX_ALIAS as the original destination"
+pass "client trapped: greyd saw the original destination $MX_ALIAS through fwd"
 
 # --- 11. blacklist via greyd-setup ------------------------------------------
 

@@ -120,8 +120,9 @@ programs, configuration files, command line switches, wire protocols and sync pr
 is a drop-in replacement. The process model, the pipes between the processes and the
 ports & adapters layout of the code are described in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 The following points remain to be done:
-  * the **netfilter** driver is verified end to end in CI (privileged container) and the **pf**
-    driver and pledge sandbox in an OpenBSD VM; the **ipfw** driver is exercised in a FreeBSD VM
+  * the **netfilter** driver is verified end to end in CI (privileged container), the **pf**
+    driver and pledge sandbox in an OpenBSD VM, the **ipfw** driver in a FreeBSD VM, and
+    synchronisation in both directions against the spamd of the OpenBSD base system
   * the **npf** (NetBSD) firewall driver has not yet been ported; on NetBSD the **pf** driver
     falls back to the proxy address for original destination lookups
   * the **sqlite** driver is not available on DragonFly BSD (the embedded SQLite has no port

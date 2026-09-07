@@ -10,7 +10,7 @@ permissions:
 
 env:
   CGO_ENABLED: '0'
-  COVER_MIN: '50'
+  COVER_MIN: '70'
 
 jobs:
   coverage:

@@ -304,7 +304,8 @@ smtp_dialogue "$SPAMD_ADDR" "$SPAMD_SMTP" s2g.example.test s2g-sender@example.te
 grep -q '^451' "$LOGDIR/smtp-sync.out" || die "spamd did not reply 451"
 wait_for "GREY tuple in spamdb" spamdb_has "GREY|127.0.0.[0-9]*|s2g.example.test|" \
     || die "spamd did not record its own tuple"
-wait_for "GREY tuple in greydb" greydb_has "GREY|127.0.0.[0-9]*|s2g.example.test|s2g-sender@example.test|s2g-rcpt@example.test" \
+# spamd relays the envelope addresses with their angle brackets.
+wait_for "GREY tuple in greydb" greydb_has "GREY|127.0.0.[0-9]*|s2g.example.test|<*s2g-sender@example.test>*|<*s2g-rcpt@example.test>*" \
     || die "greyd did not receive the grey entry from spamd"
 pass "greydb lists GREY|...|s2g.example.test|... sent by spamd"
 

@@ -6,9 +6,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/mikey-austin/greyd-v2/internal/config/parse"
 	"github.com/mikey-austin/greyd-v2/internal/ipc"
@@ -178,5 +181,49 @@ func TestServeAndShutdown(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestRunEndToEnd drives Run with a real configuration file and stops it
+// with SIGTERM, as the service manager would.
+func TestRunEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "g.sock")
+	fakeGreyd(t, sock, map[string]int64{"uptime_seconds": 5}, nil)
+	conf := filepath.Join(dir, "greyd.conf")
+	if err := os.WriteFile(conf, []byte(fmt.Sprintf("config_socket = %q\nsandbox = 0\nsyslog_enable = 0\nlog_to_file = %q\nsection monitor {\n  bind_address = \"127.0.0.1\"\n  port = 0\n  interval = 1\n}\n", sock, filepath.Join(dir, "m.log"))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb strings.Builder
+	done := make(chan int, 1)
+	go func() { done <- Run([]string{"-F", "-d", "-f", conf}, &out, &errb) }()
+
+	// Wait for the listener to appear in the log, then stop the program.
+	logPath := filepath.Join(dir, "m.log")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		b, _ := os.ReadFile(logPath)
+		if strings.Contains(string(b), "greyd-monitor starting") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("monitor did not start: %s / %s", errb.String(), b)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case rc := <-done:
+		if rc != 0 {
+			t.Fatalf("rc=%d stderr=%s", rc, errb.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after SIGTERM")
+	}
+	b, _ := os.ReadFile(logPath)
+	if !strings.Contains(string(b), "exiting") {
+		t.Fatalf("log:\n%s", b)
 	}
 }
