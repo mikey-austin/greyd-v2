@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/mikey-austin/greyd-v2/adapters/spf"
@@ -93,6 +94,27 @@ func greySandboxProfile(s *settings.Settings, store core.Store) sandbox.Profile 
 	return p
 }
 
+// lockedStore serialises access to a single store handle shared by the
+// greylister's reader and scanner goroutines. Every driver's View/Update
+// is then called one at a time, which is safe for all of them (including
+// the sqlite driver's single pinned connection).
+type lockedStore struct {
+	core.Store
+	mu sync.Mutex
+}
+
+func (l *lockedStore) View(ctx context.Context, fn func(core.ReadTx) error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.Store.View(ctx, fn)
+}
+
+func (l *lockedStore) Update(ctx context.Context, fn func(core.Tx) error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.Store.Update(ctx, fn)
+}
+
 // runGreyChild is the greylisting process (Grey_start): a reader goroutine
 // consumes messages from the main process and a scanner goroutine
 // periodically expires and whitelists entries. Both run as the grey user
@@ -109,14 +131,16 @@ func runGreyChild(ctx context.Context, s *settings.Settings, files greyFiles, lo
 	}
 	opts := core.StoreOptions{User: pw, Hostname: s.Hostname, Log: log}
 
-	readerStore, err := core.OpenStore(s.Raw(), opts)
+	// One store handle, shared by the reader and scanner goroutines. A
+	// single handle is required by drivers that allow only one opener of a
+	// database (bolt takes an exclusive file lock), and avoids
+	// same-process contention for the others; lockedStore serialises the
+	// two goroutines' transactions so the shared handle is used safely.
+	base, err := core.OpenStore(s.Raw(), opts)
 	if err != nil {
 		return fmt.Errorf("could not create db handle: %w", err)
 	}
-	scannerStore, err := core.OpenStore(s.Raw(), opts)
-	if err != nil {
-		return fmt.Errorf("could not create db handle: %w", err)
-	}
+	store := &lockedStore{Store: base}
 
 	// The greylister only sends sync messages; the main process receives.
 	var syncer grey.Syncer
@@ -143,14 +167,10 @@ func runGreyChild(ctx context.Context, s *settings.Settings, files greyFiles, lo
 		}
 	}
 
-	if err := readerStore.Open(ctx, core.OpenRW); err != nil {
+	if err := store.Open(ctx, core.OpenRW); err != nil {
 		return err
 	}
-	defer func() { _ = readerStore.Close() }()
-	if err := scannerStore.Open(ctx, core.OpenRW); err != nil {
-		return err
-	}
-	defer func() { _ = scannerStore.Close() }()
+	defer func() { _ = store.Close() }()
 
 	var checker core.SPFChecker
 	if s.SPF.Enable {
@@ -158,16 +178,16 @@ func runGreyChild(ctx context.Context, s *settings.Settings, files greyFiles, lo
 	}
 
 	startup := time.Now()
-	reader, err := grey.New(grey.Options{Settings: s, Store: readerStore, Syncer: syncer, SPF: checker, Startup: startup, Log: log})
+	reader, err := grey.New(grey.Options{Settings: s, Store: store, Syncer: syncer, SPF: checker, Startup: startup, Log: log})
 	if err != nil {
 		return err
 	}
-	scanner, err := grey.New(grey.Options{Settings: s, Store: scannerStore, TrapOut: files.trapOut, FwOut: files.fwOut, Startup: startup, Log: log})
+	scanner, err := grey.New(grey.Options{Settings: s, Store: store, TrapOut: files.trapOut, FwOut: files.fwOut, Startup: startup, Log: log})
 	if err != nil {
 		return err
 	}
 	if s.Sandbox {
-		applySandbox(greySandboxProfile(s, readerStore), log)
+		applySandbox(greySandboxProfile(s, base), log)
 	}
 
 	ctx, cancel := context.WithCancel(ctx)

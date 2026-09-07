@@ -168,8 +168,11 @@ restart_persistence() {
     ) &
     loop_pid=$!
     BACKGROUND_PIDS="$BACKGROUND_PIDS $loop_pid"
-    WAIT=10 wait_for "two greylisted attempts" retry_ok_count_at_least "$log" 2 \
+    WAIT=15 wait_for "several greylisted attempts" retry_ok_count_at_least "$log" 3 \
         || die "the retry loop got no 451 replies ($(tail -n 3 "$log" 2>/dev/null | tr '\n' ' '))"
+    # Let the greylister commit the tuple before stopping (bolt fsyncs each
+    # transaction, so the write can lag the 451 reply under load).
+    sleep 2
 
     say "SIGTERM greyd $GREYD_PID mid-traffic ($(grep -c '^ok' "$log") attempts so far)"
     stop_greyd
