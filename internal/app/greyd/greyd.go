@@ -33,6 +33,7 @@ import (
 	"github.com/mikey-austin/greyd-v2/internal/logger"
 	"github.com/mikey-austin/greyd-v2/internal/privs"
 	"github.com/mikey-austin/greyd-v2/internal/procs"
+	"github.com/mikey-austin/greyd-v2/internal/sandbox"
 	"github.com/mikey-austin/greyd-v2/internal/settings"
 	"github.com/mikey-austin/greyd-v2/internal/stats"
 	"github.com/mikey-austin/greyd-v2/internal/version"
@@ -86,6 +87,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	if o.ShowStats {
 		return showStats(s, stdout, stderr)
+	}
+	if o.SandboxProbe != "" {
+		return sandboxProbe(s, o.SandboxProbe, stdout, stderr)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
@@ -280,5 +284,44 @@ func showStats(s *settings.Settings, stdout, stderr io.Writer) int {
 		return 1
 	}
 	stats.Format(stdout, reply)
+	return 0
+}
+
+// sandboxProbe implements --sandbox-probe: build the profile the named
+// role would apply, apply it to this process and report which operations
+// the kernel then denies. The greylister profile uses the configured
+// database directory when the driver keeps files there.
+func sandboxProbe(s *settings.Settings, role string, stdout, stderr io.Writer) int {
+	log, h := newLogger(s, stderr)
+	defer func() { _ = h.Close() }()
+	var p sandbox.Profile
+	readPath, writePath := "", ""
+	switch role {
+	case "main":
+		p = sandbox.Profile{Role: sandbox.RoleMain, Strict: s.SandboxStrict}
+	case "firewall", "fw":
+		helper := driverIsPF(s) || driverIsIpfw(s) || core.NormalizeDriver(s.Firewall.Driver) == "npf"
+		p = sandbox.Profile{Role: sandbox.RoleFirewall, Exec: helper, Devices: helper, Strict: s.SandboxStrict}
+	case "grey":
+		p = sandbox.Profile{Role: sandbox.RoleGrey, ReadPaths: []string{"/etc"}, Strict: s.SandboxStrict}
+		p.ConnectPorts = append([]uint16{53}, s.DatabasePorts()...)
+		readPath = "/etc/hostname"
+		if s.Database.Raw != nil {
+			if dir := s.Database.Raw.Str("path", ""); dir != "" {
+				p.WritePaths = append(p.WritePaths, dir)
+				writePath = dir
+			}
+		}
+	default:
+		fmt.Fprintf(stderr, "greyd: unknown role %q (main, firewall, grey)\n", role)
+		return 1
+	}
+	rs, err := sandbox.Probe(p, readPath, writePath, log)
+	if err != nil {
+		fmt.Fprintf(stderr, "greyd: sandbox probe: %v\n", err)
+		return 2
+	}
+	fmt.Fprintf(stdout, "role=%s\n", role)
+	sandbox.WriteProbe(stdout, rs)
 	return 0
 }

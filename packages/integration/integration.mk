@@ -15,7 +15,9 @@ SUDO              ?= sudo
 # Extra flags for docker run, e.g. -e GREYD_IT_WAIT=40 or -e GREYD_IT_KEEP=1.
 INTEGRATION_RUN_FLAGS ?=
 
-.PHONY: test-integration test-integration-image test-integration-host vet-openbsd
+SOAK_MINUTES ?= 30
+
+.PHONY: test-integration test-integration-image test-integration-host test-soak vet-openbsd
 
 test-integration-image:
 	$(DOCKER) build -f $(INTEGRATION_DIR)/Dockerfile -t $(INTEGRATION_IMAGE) .
@@ -25,6 +27,13 @@ test-integration-image:
 # simplest way to grant them all.
 test-integration: test-integration-image
 	$(DOCKER) run --rm --privileged $(INTEGRATION_RUN_FLAGS) $(INTEGRATION_IMAGE)
+
+# Soak run in the same privileged image (packages/integration/soak.sh);
+# the samples CSV is copied out of the container into ./soak.csv.
+test-soak: test-integration-image
+	$(DOCKER) run --rm --privileged --name $(PACKAGE)-soak $(INTEGRATION_RUN_FLAGS) \
+	    -e SOAK_MINUTES=$(SOAK_MINUTES) -v "$(CURDIR)":/out \
+	    $(INTEGRATION_IMAGE) sh -c 'packages/integration/soak.sh; rc=$$?; cp /var/log/greyd/soak.csv /out/soak.csv 2>/dev/null; exit $$rc'
 
 test-integration-host: $(PROGRAMS)
 	$(SUDO) env GREYD_BIN=$(abspath $(BINDIR)) $(INTEGRATION_DIR)/run-linux.sh

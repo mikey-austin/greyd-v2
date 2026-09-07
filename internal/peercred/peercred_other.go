@@ -1,4 +1,4 @@
-//go:build !linux && !darwin && !freebsd && !dragonfly
+//go:build !linux && !darwin && !freebsd
 
 /*
  * Copyright (c) 2014-2026 Mikey Austin <mikey@greyd.org>

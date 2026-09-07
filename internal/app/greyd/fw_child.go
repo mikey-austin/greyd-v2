@@ -93,7 +93,7 @@ func runFwChild(ctx context.Context, s *settings.Settings, files fwFiles, log *s
 	if s.Sandbox {
 		// pf needs pfctl and ioctl on /dev/pf, ipfw its command; netfilter
 		// only netlink.
-		helper := driverIsPF(s) || driverIsIpfw(s)
+		helper := driverIsPF(s) || driverIsIpfw(s) || core.NormalizeDriver(s.Firewall.Driver) == "npf"
 		applySandbox(sandbox.Profile{Role: sandbox.RoleFirewall, Exec: helper, Devices: helper, Strict: s.SandboxStrict}, log)
 	}
 

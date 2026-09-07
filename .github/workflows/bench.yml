@@ -1,0 +1,61 @@
+name: Benchmarks
+
+# Runs every benchmark several times and compares the timings with the
+# last successful run on main (kept as a workflow artifact). A benchmark
+# that got more than 50% slower with p < 0.05 fails the job; the noise of
+# shared runners makes a tighter bound counterproductive, so this catches
+# order-of-magnitude regressions, not percent-level drift.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: install benchstat
+        run: make bench-tools
+      - name: run benchmarks
+        run: make bench BENCH_OUT=bench-new.txt
+      - name: fetch baseline from the last successful run on main
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: bench.yml
+          branch: main
+          workflow_conclusion: success
+          name: bench-baseline
+          path: baseline
+          if_no_artifact_found: warn
+      - name: compare with the baseline
+        run: |
+          if [ -f baseline/bench-new.txt ]; then
+            make bench-compare OLD=baseline/bench-new.txt NEW=bench-new.txt | tee compare.txt
+            { echo '### Benchmarks vs main'; echo; echo '```'; cat compare.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no baseline yet; this run becomes it"
+          fi
+      - name: keep these results as the baseline
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-baseline
+          path: bench-new.txt
+          retention-days: 90
+      - name: upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results-${{ github.run_id }}
+          path: bench-new.txt

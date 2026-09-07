@@ -499,6 +499,13 @@ func (c *Conn) readProxyHeader() {
 				return
 			}
 		}
+		if bytes.IndexByte(c.in, '\n') < 0 {
+			// The specification requires the CRLF within 107 bytes; a
+			// longer first line is not a PROXY header, however its
+			// prefix parses. Hand the state machine an unparsable line
+			// so the usual invalid-header reply and close follow.
+			c.in = append(c.in[:0], "PROXY OVERLONG"...)
+		}
 		c.finishLine()
 		return
 	}

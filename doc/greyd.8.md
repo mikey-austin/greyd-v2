@@ -3,7 +3,7 @@ greyd(8) -- spam deferral daemon
 
 ## SYNOPSIS
 
-`greyd` [**-456bdvF**] [**-f** config] [**-B** maxblack] [**-c** maxcon] [**-G** passtime:greyexp:whiteexp] [**-h** hostname] [**-l** address] [**-L** address] [**-M** address] [**-n** name] [**-p** port] [**-P** pidfile] [**-S** secs] [**-s** secs] [**-w** window] [**-Y** synctarget] [**-y** synclisten] [**-t**] [**--drivers**] [**--stats**] [**--version**]
+`greyd` [**-456bdvF**] [**-f** config] [**-B** maxblack] [**-c** maxcon] [**-G** passtime:greyexp:whiteexp] [**-h** hostname] [**-l** address] [**-L** address] [**-M** address] [**-n** name] [**-p** port] [**-P** pidfile] [**-S** secs] [**-s** secs] [**-w** window] [**-Y** synctarget] [**-y** synclisten] [**-t**] [**--drivers**] [**--stats**] [**--sandbox-probe** role] [**--version**]
 
 ## DESCRIPTION
 
@@ -100,6 +100,9 @@ Print the compiled-in database and firewall drivers and exit.
 
 * **--stats**:
 Print the counters of the running **greyd** (connections, rejections, blacklist and database entry counts) by querying it over the configuration socket, then exit. This needs the same access as **greyd-setup**(8): the *config_socket* as root or the **greyd** user, or root for the TCP configuration port. **greyd-monitor**(8) exports the same counters to Prometheus.
+
+* **--sandbox-probe** *role*:
+Apply the sandbox profile of the named process role (*main*, *firewall* or *grey*) to this throwaway process and print, one per line, whether the kernel then allows or denies a set of operations a confined process must not perform (reading */etc/passwd*, listing */*, writing to the temporary directory, starting a program, connecting and binding TCP, mounting, chrooting, becoming root). Used by the integration tests to prove enforcement on the running kernel; exits non-zero when the profile cannot be applied.
 
 * **--version**:
 Print the version and exit.

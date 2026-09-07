@@ -607,3 +607,22 @@ func TestAdoptActivatedSockets(t *testing.T) {
 		}
 	}
 }
+
+func TestInsideChroot(t *testing.T) {
+	for _, tc := range []struct {
+		path, chroot, want string
+		ok                 bool
+	}{
+		{"/var/empty/greyd/greyd.pid", "", "/var/empty/greyd", true},
+		{"/var/empty/greyd/greyd.pid", "/var/empty/greyd", "/", true},
+		{"/var/empty/greyd/greyd.pid", "/var/empty/greyd/", "/", true},
+		{"/var/empty/greyd/run/greyd.pid", "/var/empty/greyd", "/run", true},
+		{"/run/greyd/greyd.pid", "/var/empty/greyd", "", false},
+		{"/var/empty/greydx/greyd.pid", "/var/empty/greyd", "", false},
+	} {
+		got, ok := insideChroot(tc.path, tc.chroot)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("insideChroot(%q, %q) = %q,%v want %q,%v", tc.path, tc.chroot, got, ok, tc.want, tc.ok)
+		}
+	}
+}

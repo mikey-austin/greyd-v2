@@ -48,6 +48,9 @@ Configuration may also be recursively loaded by way of an *include*:
 
 The following options may be specified outside of a section. A *boolean* value is a *number* which takes the values *0* or *1*.
 
+* **syslog_enable** = *boolean*:
+  Send log messages to **syslogd**(8) (facility daemon). Enabled by default; the tools force it off, and *log_to_file* can be used with or without it.
+
 * **debug** = *boolean*:
   Log debug messages which are suppressed by default.
 
@@ -155,7 +158,7 @@ The following options may be specified outside of a section. A *boolean* value i
 The following options are common to all firewall drivers:
 
 * **driver** = *string*:
-  The name of the firewall driver to use. All drivers are compiled into the programs and are selected by name. May be one of *netfilter*, *pf*, *ipfw* or *dummy*. Legacy values from previous releases such as *"/usr/lib/greyd/greyd_netfilter.so"* or *"greyd_netfilter.la"* are still accepted: the basename is used and the *greyd_* prefix and *.so*/*.la* suffix are ignored. For example:
+  The name of the firewall driver to use. All drivers are compiled into the programs and are selected by name. May be one of *netfilter*, *pf*, *ipfw*, *npf* or *dummy*. Legacy values from previous releases such as *"/usr/lib/greyd/greyd_netfilter.so"* or *"greyd_netfilter.la"* are still accepted: the basename is used and the *greyd_* prefix and *.so*/*.la* suffix are ignored. For example:
 
         section firewall {
             #driver = "pf"
@@ -175,6 +178,22 @@ This driver runs on GNU/Linux systems and talks to the kernel directly over netl
 
 * **hash_size** = *number*:
   Maximum ipset hash size for each set.
+
+* **track_outbound** = *boolean*:
+  Track outbound connections. See **greylogd**(8) for more details.
+
+### NPF firewall driver
+
+This driver runs on NetBSD with the NPF firewall. Whitelists are kept in NPF tables declared in *npf.conf* as dynamic tables (*table <greyd-whitelist> type ipset*) and replaced in one step with *npfctl table ... replace*; connections are tracked by reading the *npflog0* interface with *bpf* (its records have the *pflog* layout). NPF offers no public lookup of a redirected connection's original destination, so the address the connection arrived on is used; the low priority MX trap therefore only works for connections that are not redirected. *npfctl* needs the NPF device, so the process holding this driver keeps its privileges.
+
+* **npfctl_path** = *string*:
+  Path to the npfctl utility, defaults to */sbin/npfctl*.
+
+* **npflog_if** = *string*:
+  The npflog interface to read logged packets from, defaults to *npflog0* (create it with *ifconfig npflog0 create* and log rules with *apply "log"* in *npf.conf*).
+
+* **net_if** = *string*:
+  As for the pf driver.
 
 * **track_outbound** = *boolean*:
   Track outbound connections. See **greylogd**(8) for more details.
@@ -380,7 +399,7 @@ The memory driver keeps the database in the memory of the greylisting process. N
   The multicast group address for sync messages.
 
 * **replay_window** = *number*:
-  Sync messages carry a counter; a message whose counter has already been seen from the same peer within the last *replay_window* counters is dropped, which defeats replayed captures. Defaults to *64*, *0* disables the check (needed when peers do not use monotonic counters).
+  Sync messages carry a counter; a message whose counter has already been seen from the same peer within the last *replay_window* counters is dropped, which defeats replayed captures. Defaults to *64*, *0* disables the check (needed when peers do not use monotonic counters). State is kept for at most 1024 peers; beyond that the least recently heard peer is forgotten.
 
 ## SPF SECTION
 

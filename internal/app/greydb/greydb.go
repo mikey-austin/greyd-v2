@@ -21,7 +21,6 @@ package greydb
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -60,10 +59,6 @@ const (
 // nowFunc supplies the current time; tests replace it to obtain exact
 // timestamps. The C implementation captures time(NULL) once per update.
 var nowFunc = time.Now
-
-// errReported marks a transaction failure whose message has already been
-// written to stderr from inside the update closure.
-var errReported = errors.New("greydb: failure reported")
 
 // syncer is the subset of the sync engine used by db_update.
 type syncer interface {
@@ -224,15 +219,16 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		if eng != nil {
 			sy = eng
 		}
-		c := 0
+		var keys []string
 		for _, k := range o.keys {
 			if k != "" {
-				c++
-				ret += dbUpdate(ctx, store, k, o.action, o.typ, sy, s.Grey.WhiteExpiry, s.Grey.TrapExpiry, stderr)
+				keys = append(keys, k)
 			}
 		}
-		if c == 0 {
+		if len(keys) == 0 {
 			fmt.Fprintf(stderr, "%s: No addresses specified\n", progName)
+		} else {
+			ret += dbUpdate(ctx, store, keys, o.action, o.typ, sy, s.Grey.WhiteExpiry, s.Grey.TrapExpiry, stderr)
 		}
 
 	default:
@@ -316,118 +312,156 @@ func printEntry(stdout io.Writer, k core.Key, d core.Data) {
 	}
 }
 
-// dbUpdate adds or deletes a single entry (db_update). It returns 0 on
-// success and 1 on failure.
-func dbUpdate(ctx context.Context, store core.Store, key string, action, typ int, s syncer,
+// updateBatch bounds the keys written per transaction, so a long greydb
+// invocation neither holds the database for its whole run nor pays one
+// commit (and fsync) per key.
+const updateBatch = 1000
+
+// dbUpdate adds or deletes entries for keys (db_update). Keys are applied
+// in batches of updateBatch per transaction; a key that fails (bad
+// address, missing entry) is reported and skipped without affecting the
+// others. It returns the number of keys that failed.
+func dbUpdate(ctx context.Context, store core.Store, keys []string, action, typ int, s syncer,
 	whiteExp, trapExp int64, stderr io.Writer) int {
 	warn := func(format string, a ...any) {
 		fmt.Fprintf(stderr, "%s: %s\n", progName, fmt.Sprintf(format, a...))
 	}
 	now := nowFunc().Unix()
+	failed := 0
 
-	var k core.Key
+	type done struct {
+		key string
+		d   core.Data
+	}
+	for len(keys) > 0 {
+		batch := keys
+		if len(batch) > updateBatch {
+			batch = keys[:updateBatch]
+		}
+		keys = keys[len(batch):]
+
+		var applied []done
+		err := store.Update(ctx, func(tx core.Tx) error {
+			applied = applied[:0]
+			for _, key := range batch {
+				k, key, ok := parseKey(key, typ, warn)
+				if !ok {
+					failed++
+					continue
+				}
+				d, ok := applyKey(tx, k, key, action, typ, now, whiteExp, trapExp, warn)
+				if !ok {
+					failed++
+					continue
+				}
+				applied = append(applied, done{key: key, d: d})
+			}
+			return nil
+		})
+		if err != nil {
+			// Transaction begin or commit failure: nothing of this batch
+			// was written.
+			warn("%v", err)
+			failed += len(batch)
+			continue
+		}
+		if s != nil {
+			del := action == actionDel
+			for _, a := range applied {
+				switch typ {
+				case typeWhite:
+					s.White(a.key, time.Unix(now, 0), time.Unix(a.d.Expire, 0), del)
+				case typeTraphit:
+					s.Trapped(a.key, time.Unix(now, 0), time.Unix(a.d.Expire, 0), del)
+				}
+			}
+		}
+	}
+	return failed
+}
+
+// parseKey validates and normalises one command line key for its type.
+func parseKey(key string, typ int, warn func(string, ...any)) (core.Key, string, bool) {
 	switch typ {
 	case typeTraphit, typeWhite:
 		// We are expecting a numeric IP address.
 		if ip.CheckAddr(key) == -1 {
 			warn("Invalid IP address %s", key)
-			return 1
+			return core.Key{}, key, false
 		}
-		k = core.IPKey(key)
-
+		return core.IPKey(key), key, true
 	case typeSpamtrap:
 		key = core.NormalizeEmail(key)
 		if !strings.Contains(key, "@") {
 			warn("Not an email address: %s", key)
-			return 1
+			return core.Key{}, key, false
 		}
-		k = core.MailKey(key)
-
+		return core.MailKey(key), key, true
 	case typeDomain:
 		key = core.NormalizeEmail(key)
-		k = core.DomainKey(key)
-
+		return core.DomainKey(key), key, true
 	default:
 		warn("unknown type %d", typ)
-		return 1
+		return core.Key{}, key, false
 	}
+}
 
-	var d core.Data
-	err := store.Update(ctx, func(tx core.Tx) error {
-		if action == actionDel {
-			found, err := tx.Del(k)
-			if err != nil {
-				warn("Deletion failed")
-				return errReported
-			}
-			if !found {
-				warn("No entry for %s", key)
-				return errReported
-			}
-			return nil
-		}
-
-		// Add a new entry.
-		var found bool
-		var err error
-		d, found, err = tx.Get(k)
+// applyKey performs one add or delete inside tx and returns the resulting
+// data (for the sync announcement) and whether it succeeded.
+func applyKey(tx core.Tx, k core.Key, key string, action, typ int, now, whiteExp, trapExp int64, warn func(string, ...any)) (core.Data, bool) {
+	if action == actionDel {
+		found, err := tx.Del(k)
 		if err != nil {
-			return errReported
+			warn("Deletion failed")
+			return core.Data{}, false
 		}
-		if found {
-			// Update the existing entry in the database.
-			d.PCount++
-			switch typ {
-			case typeWhite:
-				d.Pass = now
-				d.Expire = now + whiteExp
-			case typeTraphit:
-				d.Expire = now + trapExp
-				d.PCount = core.PCountTrapped
-			case typeSpamtrap:
-				d.Expire = 0
-				d.PCount = core.PCountSpamtrap
-			case typeDomain:
-				d.Expire = 0
-				d.PCount = core.PCountDomain
-			}
-		} else {
-			// Create a fresh entry and insert into the database.
-			d = core.Data{First: now, BCount: 1}
-			switch typ {
-			case typeWhite:
-				d.Pass = now
-				d.Expire = now + whiteExp
-			case typeTraphit:
-				d.Expire = now + trapExp
-				d.PCount = core.PCountTrapped
-			case typeSpamtrap, typeDomain:
-				d.Expire = 0
-				d.PCount = core.PCountSpamtrap
-			}
+		if !found {
+			warn("No entry for %s", key)
+			return core.Data{}, false
 		}
-		if err := tx.Put(k, d); err != nil {
-			warn("Put failed")
-			return errReported
-		}
-		return nil
-	})
-	if err != nil {
-		if !errors.Is(err, errReported) {
-			// Transaction begin or commit failure.
-			warn("%v", err)
-		}
-		return 1
+		return core.Data{}, true
 	}
 
-	if s != nil {
-		del := action == actionDel
+	// Add a new entry.
+	d, found, err := tx.Get(k)
+	if err != nil {
+		return core.Data{}, false
+	}
+	if found {
+		// Update the existing entry in the database.
+		d.PCount++
 		switch typ {
 		case typeWhite:
-			s.White(key, time.Unix(now, 0), time.Unix(d.Expire, 0), del)
+			d.Pass = now
+			d.Expire = now + whiteExp
 		case typeTraphit:
-			s.Trapped(key, time.Unix(now, 0), time.Unix(d.Expire, 0), del)
+			d.Expire = now + trapExp
+			d.PCount = core.PCountTrapped
+		case typeSpamtrap:
+			d.Expire = 0
+			d.PCount = core.PCountSpamtrap
+		case typeDomain:
+			d.Expire = 0
+			d.PCount = core.PCountDomain
+		}
+	} else {
+		// Create a fresh entry and insert into the database.
+		d = core.Data{First: now, BCount: 1}
+		switch typ {
+		case typeWhite:
+			d.Pass = now
+			d.Expire = now + whiteExp
+		case typeTraphit:
+			d.Expire = now + trapExp
+			d.PCount = core.PCountTrapped
+		case typeSpamtrap, typeDomain:
+			d.Expire = 0
+			d.PCount = core.PCountSpamtrap
 		}
 	}
-	return 0
+	if err := tx.Put(k, d); err != nil {
+		warn("Put failed")
+		return core.Data{}, false
+	}
+	return d, true
 }

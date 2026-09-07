@@ -15,3 +15,5 @@ coverage.html
 packages/nfpm/stage/
 packages/systemd/*.socket
 coverage.out.raw
+bench*.txt
+soak.csv

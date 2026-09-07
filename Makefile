@@ -228,3 +228,4 @@ distclean: clean
 # Packaging, release and coverage helpers.
 include packages/release.mk
 include packages/integration/integration.mk
+include packages/bench.mk

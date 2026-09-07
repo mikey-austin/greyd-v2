@@ -21,5 +21,6 @@ import (
 	_ "github.com/mikey-austin/greyd-v2/adapters/fw/dummy"
 	_ "github.com/mikey-austin/greyd-v2/adapters/fw/ipfw"
 	_ "github.com/mikey-austin/greyd-v2/adapters/fw/netfilter"
+	_ "github.com/mikey-austin/greyd-v2/adapters/fw/npf"
 	_ "github.com/mikey-austin/greyd-v2/adapters/fw/pf"
 )

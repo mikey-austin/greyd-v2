@@ -322,3 +322,54 @@ SYNs to port 25, then checks that
 The firewall process keeps root with this driver because the ipfw control
 socket checks privileges on every call; the main and greylister processes
 still drop to greyd and greydb.
+
+## Additional Linux harness steps
+
+`run-linux.sh` (library in `lib.sh`, load generator in `loadgen.py`) also
+covers, after the basic flow:
+
+- **privilege audit**: `/proc/PID/status` of the main, firewall and
+  greylister processes and greylogd must show the expected uid/gid,
+  `NoNewPrivs: 1`, `Seccomp: 2`, the capability set (only CAP_NET_ADMIN in
+  the firewall process and greylogd) and the chroot root;
+- **sandbox enforcement**: `greyd --sandbox-probe ROLE` per role as the
+  greyd user must report the expected denials (reads outside the allowed
+  paths, writes to /tmp, exec, TCP connect, mount, chroot, setuid);
+  `tcp-bind` and `udp-bind` are printed but not asserted;
+- **throughput and latency SLO**: 100 concurrent greylisted dialogues,
+  p99 time to the 451 under 3 s and every tuple in the database within
+  10 s (`GREYD_IT_LOAD_COUNT`);
+- **large firewall sets**: 100k blacklist entries through `greyd-setup -b`
+  and 20k whitelist entries through `greydb -a`, with timings
+  (`GREYD_IT_BLACK_COUNT`, `GREYD_IT_WHITE_COUNT`);
+- **chaos**: SIGKILL of the firewall child and of the greylister child
+  with a connection open; the parent must exit 0 promptly and clean up;
+- **restart mid-traffic**: SIGTERM and restart while a client retries,
+  with sqlite and with bolt; the tuple survives and is whitelisted after
+  `pass_time`.
+
+## Soak (`soak.sh`, `make test-soak`)
+
+Runs the daemons for `SOAK_MINUTES` (30) under a steady load of
+`SOAK_RATE` (20) dialogues per second plus periodic greyd-setup and greydb
+activity, sampling counters, RSS and descriptor counts every 30 s into
+`soak.csv`. It fails when RSS grows more than 20 % after the fifth minute,
+descriptors climb, counters decrease, the scanner falls behind or the log
+shows errors. `.github/workflows/nightly.yml` runs it every night and
+keeps the CSV as an artifact.
+
+    $ make test-soak SOAK_MINUTES=5
+
+## NetBSD smoke test (npf)
+
+`run-netbsd.sh` loads an `npf.conf` with the greyd tables and a log rule,
+starts greyd with the `npf` driver and checks the 451 dialogue, the table
+replacement through `npfctl`, greylogd on `npflog0`, a greyd-setup push and
+a clean shutdown. NPF cannot report the original destination of a
+redirected connection, so the low priority MX trap is not exercised.
+
+## DragonFly BSD smoke test (pf)
+
+`run-dragonfly.sh` is the OpenBSD pf test adapted to DragonFly's pf (the
+older `rdr` grammar) and the bolt database, since the embedded SQLite has
+no DragonFly port.

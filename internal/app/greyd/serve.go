@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/mikey-austin/greyd-v2/internal/ipc"
@@ -209,13 +210,32 @@ func (d *daemon) sandbox() {
 		return
 	}
 	p := sandbox.Profile{Role: sandbox.RoleMain, Strict: d.s.SandboxStrict}
-	if !d.s.Chroot {
-		p.WritePaths = append(p.WritePaths, filepath.Dir(d.pidfile.Path()))
-		if d.s.ConfigSocket != "" {
-			p.WritePaths = append(p.WritePaths, filepath.Dir(d.s.ConfigSocket))
+	// The pidfile (and the configuration socket) are removed at exit, so
+	// their directories stay writable: as seen from inside the chroot
+	// when there is one, otherwise as given.
+	if dir, ok := insideChroot(d.pidfile.Path(), d.chroot); ok {
+		p.WritePaths = append(p.WritePaths, dir)
+	}
+	if d.s.ConfigSocket != "" {
+		if dir, ok := insideChroot(d.s.ConfigSocket, d.chroot); ok {
+			p.WritePaths = append(p.WritePaths, dir)
 		}
 	}
 	applySandbox(p, d.log)
+}
+
+// insideChroot returns the directory of path as the process now sees it:
+// unchanged without a chroot, made relative to the new root when path
+// lies under it, and not at all (false) when the chroot hides it.
+func insideChroot(path, chroot string) (string, bool) {
+	if chroot == "" {
+		return filepath.Dir(path), true
+	}
+	rel := strings.TrimPrefix(path, strings.TrimSuffix(chroot, "/"))
+	if rel == path || !strings.HasPrefix(rel, "/") {
+		return "", false
+	}
+	return filepath.Dir(rel), true
 }
 
 // applySandbox applies a profile, treating an unsupported platform as a

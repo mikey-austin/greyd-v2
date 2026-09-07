@@ -35,6 +35,8 @@ Add or delete the keys as TRAPPED entries. See the GREYTRAPPING section of **gre
 * **-s**:
   Print a summary instead of the listing: the number of GREY, WHITE, TRAPPED, SPAMTRAP and DOMAIN entries, one per line.
 
+Keys are written in transactions of up to a thousand, so long lists load quickly; a key that fails (an invalid address, or a deletion of an entry that does not exist) is reported and the others still go through. The exit status is the number of failed keys.
+
 If adding or deleting a SPAMTRAP address (**-T**), keys should be specified as email addresses:
 
     spamtrap@mydomain.org

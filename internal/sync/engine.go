@@ -323,7 +323,15 @@ type replayState struct {
 	hi     uint32
 	bitmap uint64
 	seen   bool
+	// last is when the peer was last heard from, for eviction.
+	last time.Time
 }
+
+// maxReplayPeers bounds the replay table. Sync peers are a handful of
+// hosts, but an unkeyed receiver can be sent packets from any spoofed
+// source; beyond the bound the least recently seen peer is evicted, which
+// at worst re-opens the window for that one peer.
+const maxReplayPeers = 1024
 
 // acceptCounter applies the replay window (sync.replay_window, 0 disables
 // it). Counters restart at 0 when a peer restarts, so a small counter far
@@ -346,9 +354,13 @@ func (e *Engine) acceptCounter(from *net.UDPAddr, counter uint32) bool {
 	defer e.replayMu.Unlock()
 	st := e.replay[addr]
 	if st == nil {
+		if len(e.replay) >= maxReplayPeers {
+			e.evictReplayPeer()
+		}
 		st = &replayState{}
 		e.replay[addr] = st
 	}
+	st.last = time.Now()
 	if !st.seen {
 		st.seen, st.hi, st.bitmap = true, counter, 1
 		return true
@@ -461,5 +473,21 @@ func (e *Engine) send(pkt []byte) {
 		if _, err := e.conn.WriteToUDP(pkt, h.addr); err != nil {
 			e.log.Warn("sendmsg failed", "host", h.name, "err", err)
 		}
+	}
+}
+
+// evictReplayPeer drops the least recently seen peer; the caller holds
+// replayMu.
+func (e *Engine) evictReplayPeer() {
+	var oldest netip.Addr
+	var when time.Time
+	first := true
+	for a, st := range e.replay {
+		if first || st.last.Before(when) {
+			oldest, when, first = a, st.last, false
+		}
+	}
+	if !first {
+		delete(e.replay, oldest)
 	}
 }

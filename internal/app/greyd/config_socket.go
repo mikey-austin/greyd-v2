@@ -30,8 +30,8 @@ import (
 )
 
 // cfgConnTimeout bounds reading a blacklist from a configuration
-// connection.
-const cfgConnTimeout = 30 * time.Second
+// connection. It is a variable so tests can shorten it.
+var cfgConnTimeout = 30 * time.Second
 
 // serveConfig accepts configuration connections one at a time.
 func (d *daemon) serveConfig(ctx context.Context) error {

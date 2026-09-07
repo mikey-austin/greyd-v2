@@ -32,11 +32,25 @@
         document and an end to end integration harness (Linux container,
         OpenBSD VM and FreeBSD VM, including a sync protocol compatibility
         test against the spamd of the OpenBSD base system) round out the
-        tooling. A native FreeBSD firewall driver, ipfw, joins netfilter
-        and pf. The spamd test caught a wire format bug: the port put the
+        tooling. Native FreeBSD (ipfw) and NetBSD (npf) firewall drivers
+        join netfilter and pf; DragonFly BSD runs the pf driver and is
+        covered by its own VM job. The spamd test caught a wire format bug: the port put the
         strings of a grey sync entry two bytes after where spamd (and the
         C greyd) expect them, so grey entries never synchronised with
-        other implementations; white and trapped entries were unaffected. The harness found and fixed
+        other implementations; white and trapped entries were unaffected.
+        The test suites grew a second layer: adversarial SMTP clients,
+        clock boundary and configuration corpus tests, on-the-wire sync
+        abuse, golden database fixtures, a privilege audit and sandbox
+        enforcement probe (greyd --sandbox-probe) in the container
+        harness, chaos and restart steps, a latency SLO and large set
+        timings, a nightly soak run, and a benchmark regression gate.
+        They found three more things to tighten: the per-peer sync
+        replay table is now bounded (an unkeyed receiver could be made to
+        grow it from spoofed sources), a PROXY protocol v1 line longer
+        than the 107 bytes the specification allows is refused even when
+        its prefix parses, and greydb writes its keys in transactions of
+        a thousand instead of one commit per key (20,000 whitelist
+        additions took five minutes on sqlite before, seconds now). The harness found and fixed
         three defects of the port: the netfilter firewall process crashed
         after dropping privileges (keep-caps was set on one thread only,
         and the capability set was narrowed before the drop), multi-line

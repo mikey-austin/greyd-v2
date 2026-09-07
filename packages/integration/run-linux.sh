@@ -14,336 +14,222 @@
 #      (exercises greylogd's inbound and outbound groups),
 #   3. pre-loads a whitelist entry with greydb, starts greyd -F and
 #      greylogd, and checks:
+#        - every process runs with the expected uid/gid, no_new_privs,
+#          seccomp filter, capabilities and root (privilege audit),
+#        - greyd --sandbox-probe confirms what each role's sandbox denies,
 #        - an SMTP dialogue through the DNAT'd port is greylisted (451)
 #          and recorded as a GREY tuple,
 #        - the whitelist reached the greyd-whitelist ipset,
 #        - an outbound SYN to port 25 whitelists both the destination
 #          (outbound group) and the source (inbound group) through greylogd,
+#        - 100 concurrent greylisted dialogues meet the latency SLO and
+#          all reach the database,
 #        - after the low-priority MX grace period a connection whose
 #          pre-DNAT destination is low_prio_mx is trapped: the conntrack
 #          lookup returned the original destination,
 #        - the trapped address is rejected with the traplist message,
 #        - a blacklist pushed with greyd-setup over the unix configuration
 #          socket is applied: the next connection gets the 450 message,
+#        - a 100,000 entry blacklist reaches the greyd-blacklist ipset in
+#          time and 20,000 greydb whitelist entries reach greyd-whitelist,
+#        - killing either child makes the parent exit cleanly,
+#        - greylist state survives a restart (sqlite and bolt),
 #        - both daemons stop cleanly on SIGTERM,
 #   4. tears down the rules and ipsets; logs are dumped on failure.
 #
-# Environment:
-#   GREYD_SRC       repository root (default: two levels above this script)
-#   GREYD_BIN       directory holding the programs (default: $GREYD_SRC/bin,
-#                   built with "go build" when missing)
-#   GREYD_IT_WAIT   seconds to poll for each asynchronous assertion (20)
-#   GREYD_IT_KEEP   set to 1 to leave rules, sets and files in place
-#   GREYD_IT_DROP_PRIVS
-#                   drop_privs value written to greyd.conf (1). 0 keeps every
-#                   process root; only for isolating failures of the
-#                   privilege drop itself from the rest of the flow.
+# Environment: see lib.sh (GREYD_SRC, GREYD_BIN, GREYD_IT_WAIT,
+# GREYD_IT_KEEP, GREYD_IT_DROP_PRIVS) plus
+#   GREYD_IT_LOAD_COUNT   concurrent dialogues of the SLO step (100)
+#   GREYD_IT_BLACK_COUNT  blacklist entries of the large set step (100000)
+#   GREYD_IT_WHITE_COUNT  greydb whitelist entries of the large set step (20000)
 #
-set -euo pipefail
-
 HERE=$(cd "$(dirname "$0")" && pwd)
-SRC=${GREYD_SRC:-$(cd "$HERE/../.." && pwd)}
-BIN=${GREYD_BIN:-$SRC/bin}
-WAIT=${GREYD_IT_WAIT:-20}
-KEEP=${GREYD_IT_KEEP:-0}
-DROP_PRIVS=${GREYD_IT_DROP_PRIVS:-1}
+# shellcheck source=lib.sh
+. "$HERE/lib.sh"
+it_setup_env
 
-ETC=/etc/greyd
-RUN=/run/greyd
-LIB=/var/lib/greyd
-LOGDIR=/var/log/greyd
-CHROOT=/var/empty/greyd
-CONF=$ETC/greyd.conf
-SOCK=$RUN/config.sock
-LOG=$LOGDIR/greyd.log
-BLACKLIST_FILE=$ETC/integration-blacklist.txt
+LOAD_COUNT=${GREYD_IT_LOAD_COUNT:-100}
+BLACK_COUNT=${GREYD_IT_BLACK_COUNT:-100000}
+WHITE_COUNT=${GREYD_IT_WHITE_COUNT:-20000}
+RESTART_PASS_TIME=10      # grey.pass_time of the restart steps
+RESTART_SRC=127.0.0.11    # client of the restart steps (a fresh address)
+SLO_P99=3                 # seconds
+SLO_DB_WINDOW=10          # seconds for all tuples to reach the database
+BIG_BLACKLIST_FILE=$ETC/big-blacklist.txt
+BIG_CONF=$ETC/big.conf
+PROBE_CONF=$ETC/probe.conf
+RESTART_CONF=$ETC/restart-sqlite.conf
+BOLT_CONF=$ETC/restart-bolt.conf
 
-SMTP_PORT=8025
-DNAT_PORT=2525
-IN_GROUP=155
-OUT_GROUP=255
-WHITELIST_SET=greyd-whitelist
+# --- step functions used more than once -------------------------------------
 
-PRELOAD_WHITE=10.99.0.1   # whitelisted with greydb before greyd starts
-LOW_PRIO_MX=127.0.0.2     # pre-DNAT destination that traps first-time senders
-TRAP_SRC=127.0.0.9        # client that connects to the low priority MX
-NFLOG_SRC=127.0.0.6       # client of the outbound port 25 SYN
-NFLOG_DST=127.0.0.5       # destination of the outbound port 25 SYN
-LOW_PRIO_GRACE=60         # grey.LowPrioGrace: the trap is armed this long after start
-
-# Chains of our own so that teardown never touches foreign rules.
-NAT_CHAIN=GREYD_IT_NAT
-OUT_CHAIN=GREYD_IT_OUT
-IN_CHAIN=GREYD_IT_IN
-
-GREYD_PID=
-GREYLOGD_PID=
-GREYD_START=0
-STATUS=1
-STEP=0
-
-# --- helpers -----------------------------------------------------------------
-
-say()  { printf '%s\n' "$*"; }
-step() { STEP=$((STEP + 1)); say ""; say "=== step $STEP: $*"; }
-pass() { say "PASS: $*"; }
-
-die() {
-    say "FAIL: $*" >&2
-    dump_state
-    exit 1
-}
-
-dump_state() {
-    say ""
-    say "--- diagnostics ---"
-    say "greyd pid $GREYD_PID alive: $(is_alive "$GREYD_PID" && echo yes || echo no)"
-    say "greylogd pid $GREYLOGD_PID alive: $(is_alive "$GREYLOGD_PID" && echo yes || echo no)"
-    say "--- $LOG (tail) ---";          tail -n 200 "$LOG" 2>/dev/null || true
-    # Panics print their reason first, so show the head as well as the tail.
-    say "--- greyd stderr (head) ---";  head -n 40 "$LOGDIR/greyd.stderr" 2>/dev/null || true
-    say "--- greyd stderr (tail) ---";  tail -n 20 "$LOGDIR/greyd.stderr" 2>/dev/null || true
-    say "--- greylogd stderr (head) ---"; head -n 40 "$LOGDIR/greylogd.stderr" 2>/dev/null || true
-    if grep -qs "AllThreadsSyscall6 results differ between threads" "$LOGDIR/greyd.stderr" "$LOGDIR/greylogd.stderr"; then
-        say "HINT: a capset() succeeded on one thread and failed (EPERM) on the others. PR_SET_KEEPCAPS is"
-        say "      per-thread, so only the thread that called prctl in netfilter.Open keeps CAP_NET_ADMIN across"
-        say "      the all-threads setuid; the all-threads capset in raiseCaps then disagrees between threads."
-        say "      Re-run with GREYD_IT_DROP_PRIVS=0 to exercise the rest of the flow."
+# probe_role ROLE USER: runs greyd --sandbox-probe as USER and asserts the
+# expected verdicts (name=denied|ok) given as the remaining arguments.
+# tcp-bind and udp-bind are informational: Landlock lets Go's net.Listen
+# bind on some kernels, and UDP is unrestricted.
+probe_role() {
+    local role=$1 user=$2; shift 2
+    local out=$LOGDIR/probe-$role.out rc=0 want name value got line
+    run_as "$user" "$BIN/greyd" --sandbox-probe "$role" -f "$PROBE_CONF" >"$out" 2>"$out.err" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        cat "$out" "$out.err"
+        die "greyd --sandbox-probe $role (as $user) exited $rc"
     fi
-    say "--- greydb ---";               run_greydb 2>&1 || true
-    say "--- iptables -S ---";          iptables -S 2>&1 || true
-    say "--- iptables -t nat -S ---";   iptables -t nat -S 2>&1 || true
-    say "--- ipset list ---";           ipset list 2>&1 || true
-    say "--- conntrack -L ---";         conntrack -L 2>&1 | head -n 50 || true
-    say "--- processes ---";            ps -eo pid,user,args 2>/dev/null | grep -E 'grey(d|logd)' | grep -v grep || true
-}
-
-is_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
-
-# wait_for DESCRIPTION COMMAND...: polls every $WAIT_STEP seconds until
-# COMMAND succeeds or $WAIT seconds pass. Both may be overridden per call
-# (WAIT=70 wait_for ...).
-WAIT_STEP=0.5
-wait_for() {
-    local what=$1; shift
-    local deadline=$((SECONDS + WAIT))
-    while ! "$@" >/dev/null 2>&1; do
-        if [ "$SECONDS" -ge "$deadline" ]; then
-            say "timed out after ${WAIT}s waiting for: $what" >&2
-            return 1
+    line=$(grep -E '^(tcp-bind|udp-bind)=' "$out" | tr '\n' ' ')
+    say "$role (as $user): $(grep -c '=' "$out") probes; informational: $line"
+    for want in "$@"; do
+        name=${want%%=*}; value=${want#*=}
+        got=$(sed -n "s/^$name=//p" "$out")
+        if [ "$got" != "$value" ]; then
+            say "--- full probe output ($role) ---"; cat "$out" "$out.err"
+            die "sandbox probe $role: $name=$got, expected $value"
         fi
-        sleep "$WAIT_STEP"
-    done
-    return 0
-}
-
-# The database directory belongs to the grey user; greydb must run as that
-# user or it would leave root-owned files the greylister cannot open.
-run_greydb() {
-    if command -v runuser >/dev/null 2>&1; then
-        runuser -u greydb -- "$BIN/greydb" -f "$CONF" "$@"
-    else
-        su -s /bin/sh greydb -c "\"$BIN/greydb\" -f \"$CONF\" $*"
-    fi
-}
-
-db_has() { run_greydb 2>/dev/null | grep -q -- "$1"; }
-
-# smtp SRC DST PORT EXPECT [EXPECT_TEXT]
-smtp() {
-    local src=$1 dst=$2 port=$3 expect=$4 text=${5:-}
-    set -- --dst "$dst" --port "$port" --expect "$expect" --timeout 30
-    [ -n "$src" ] && set -- "$@" --src "$src"
-    [ -n "$text" ] && set -- "$@" --expect-text "$text"
-    python3 "$HERE/smtpcheck.py" "$@"
-}
-
-smtp_quiet() { smtp "$@" 2>/dev/null; }
-
-log_has() { grep -q -- "$1" "$LOG" 2>/dev/null; }
-
-# --- teardown ----------------------------------------------------------------
-
-stop_daemon() {
-    local pid=$1 name=$2
-    if is_alive "$pid"; then
-        kill -TERM "$pid" 2>/dev/null || true
-        local deadline=$((SECONDS + 10))
-        while is_alive "$pid" && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.2; done
-        if is_alive "$pid"; then
-            say "$name did not stop on SIGTERM, killing" >&2
-            kill -KILL "$pid" 2>/dev/null || true
-        fi
-    fi
-}
-
-remove_rules() {
-    iptables -t nat -D OUTPUT -o lo -j "$NAT_CHAIN" 2>/dev/null || true
-    iptables -t nat -F "$NAT_CHAIN" 2>/dev/null || true
-    iptables -t nat -X "$NAT_CHAIN" 2>/dev/null || true
-    iptables -D OUTPUT -o lo -j "$OUT_CHAIN" 2>/dev/null || true
-    iptables -F "$OUT_CHAIN" 2>/dev/null || true
-    iptables -X "$OUT_CHAIN" 2>/dev/null || true
-    iptables -D INPUT -i lo -j "$IN_CHAIN" 2>/dev/null || true
-    iptables -F "$IN_CHAIN" 2>/dev/null || true
-    iptables -X "$IN_CHAIN" 2>/dev/null || true
-    for s in "$WHITELIST_SET" "$WHITELIST_SET-ipv6" "$WHITELIST_SET-stage" "$WHITELIST_SET-ipv6-stage" greyd-blacklist greyd-blacklist-stage; do
-        ipset destroy "$s" 2>/dev/null || true
     done
 }
 
-cleanup() {
-    local rc=$?
-    trap - EXIT
-    if [ "$rc" -ne 0 ] && [ "$STATUS" -ne 0 ]; then
-        # An unexpected error (set -e) rather than a die: show the state.
-        say "FAIL: aborted with status $rc at step $STEP" >&2
-        dump_state
-    fi
-    if [ "$KEEP" = 1 ]; then
-        say "GREYD_IT_KEEP=1: leaving daemons, rules and files in place"
-        exit "$rc"
-    fi
-    stop_daemon "$GREYLOGD_PID" greylogd
-    stop_daemon "$GREYD_PID" greyd
-    remove_rules
-    rm -f "$SOCK" "$RUN/greylogd.pid" "$CHROOT/greyd.pid"
-    exit "$rc"
+# hold_connection SECS: keeps an SMTP connection open in the background
+# (banner + EHLO, then idle) so that chaos happens with a client attached.
+hold_connection() {
+    python3 - "$1" "$DNAT_PORT" <<'EOF' &
+import socket, sys, time
+s = socket.create_connection(("127.0.0.1", int(sys.argv[2])), timeout=10)
+s.recv(1024)
+s.sendall(b"EHLO slow.example.test\r\n")
+s.recv(1024)
+time.sleep(float(sys.argv[1]))
+s.close()
+EOF
+    BACKGROUND_PIDS="$BACKGROUND_PIDS $!"
 }
-trap cleanup EXIT
+
+# chaos_kill ROLE: SIGKILLs a child while a connection is open and asserts
+# the parent logs it, exits 0 within 5 seconds, removes its pidfile and
+# leaves no greyd process behind. The configuration socket lives outside
+# the chroot, so the main process cannot unlink it; that is reported.
+chaos_kill() {
+    local role=$1 victim t0 elapsed
+    case "$role" in
+        firewall)   victim=$FW_PID ;;
+        greylister) victim=$GREY_PID ;;
+    esac
+    hold_connection 30
+    WAIT=10 wait_for "an open connection" stat_at_least connections_current 1 \
+        || die "the slow client did not register as an open connection"
+    say "connections_current=$(stat_value connections_current); SIGKILL $role child $victim"
+    t0=$(now_f)
+    kill -KILL "$victim"
+    set +e
+    wait "$GREYD_PID"; GREYD_RC=$?
+    set -e
+    elapsed=$(elapsed_since "$t0")
+    say "parent $GREYD_PID exited with status $GREYD_RC after ${elapsed}s"
+    log_has "child process exited role=$role" || die "the parent did not log the $role child's exit"
+    [ "$GREYD_RC" -eq 0 ] || die "parent exited with status $GREYD_RC after the $role child was killed"
+    # The parent gives the surviving child five seconds to finish (a scan
+    # in progress runs to the end of its transaction) before killing it.
+    float_lt "$elapsed" 10 || die "parent took ${elapsed}s to exit, expected under 10s"
+    [ ! -e "$PIDFILE" ] || die "pidfile $PIDFILE was not removed"
+    GREYD_PID=; FW_PID=; GREY_PID=
+    wait_for "no greyd processes" no_greyd_processes || die "greyd processes survived: $(greyd_processes)"
+    if [ -e "$SOCK" ]; then
+        warn "configuration socket $SOCK still exists: the chrooted main process cannot unlink it (greyd removes stale sockets at start)"
+    fi
+    kill_background
+}
+
+# retry_ok_count_at_least LOG N / retry_ok_after LOG EPOCH: progress of the
+# retry loop of restart_persistence (one "ok EPOCH" line per 451).
+retry_ok_count_at_least() { local n; n=$(grep -c '^ok' "$1" 2>/dev/null || true); [ "${n:-0}" -ge "$2" ]; }
+retry_ok_after() { awk -v t="$2" '$1 == "ok" && $2 > t { f = 1 } END { exit !f }' "$1" 2>/dev/null; }
+
+# restart_persistence CONF LABEL: with a greylisted tuple being retried in a
+# loop, SIGTERMs and restarts greyd (running with CONF, pass_time
+# $RESTART_PASS_TIME) and asserts the tuple survives with its counters
+# intact and is whitelisted once retried after pass_time. greydb is only
+# consulted while greyd is stopped (bolt holds an exclusive file lock).
+# Ends with greyd stopped.
+restart_persistence() {
+    local conf=$1 label=$2 helo="restart-$2.example.test"
+    local key="^GREY|$RESTART_SRC|$helo|$helo@example.test|rcpt@example.test|"
+    local log=$LOGDIR/restart-$label.log flag=$LOGDIR/restart-$label.stop
+    local entry first pass expire bcount first2 pass2 expire2 bcount2 loop_pid
+    rm -f "$flag" "$log"
+
+    # The retry loop; connection failures during the restarts are expected.
+    (
+        while [ ! -e "$flag" ]; do
+            if smtp_quiet "$RESTART_SRC" 127.0.0.1 "$DNAT_PORT" 451 "" "$helo" >/dev/null 2>&1; then
+                echo "ok $EPOCHSECONDS" >>"$log"
+            else
+                echo "fail $EPOCHSECONDS" >>"$log"
+            fi
+            sleep 0.5
+        done
+    ) &
+    loop_pid=$!
+    BACKGROUND_PIDS="$BACKGROUND_PIDS $loop_pid"
+    WAIT=10 wait_for "two greylisted attempts" retry_ok_count_at_least "$log" 2 \
+        || die "the retry loop got no 451 replies ($(tail -n 3 "$log" 2>/dev/null | tr '\n' ' '))"
+
+    say "SIGTERM greyd $GREYD_PID mid-traffic ($(grep -c '^ok' "$log") attempts so far)"
+    stop_greyd
+    [ "$GREYD_RC" -eq 0 ] || die "greyd exited with status $GREYD_RC on SIGTERM"
+    entry=$(run_greydb_conf "$conf" 2>/dev/null | grep -- "$key" || true)
+    [ -n "$entry" ] || die "GREY tuple $key not in the $label database after the first stop"
+    IFS='|' read -r _ _ _ _ _ first pass expire bcount _ <<<"$entry"
+    say "before restart: $entry"
+    [ "$pass" = "$expire" ] || die "tuple already marked for whitelisting before pass_time (pass=$pass expire=$expire)"
+
+    start_greyd "$conf"
+    say "greyd restarted as $GREYD_PID; waiting for a retry after pass_time (first=$first + ${RESTART_PASS_TIME}s)"
+    WAIT=$((RESTART_PASS_TIME + 20)) wait_for "a 451 after pass_time" retry_ok_after "$log" $((first + RESTART_PASS_TIME + 1)) \
+        || die "no greylisted retry happened after pass_time (loop log: $(tail -n 5 "$log" | tr '\n' ' '))"
+    touch "$flag"
+    wait "$loop_pid" 2>/dev/null || true
+    say "retry loop: $(grep -c '^ok' "$log") x 451, $(grep -c '^fail' "$log") failed attempts (during the restart)"
+
+    stop_greyd
+    [ "$GREYD_RC" -eq 0 ] || die "greyd exited with status $GREYD_RC on the second SIGTERM"
+    entry=$(run_greydb_conf "$conf" 2>/dev/null | grep -- "$key" || true)
+    [ -n "$entry" ] || die "GREY tuple $key vanished across the restart"
+    IFS='|' read -r _ _ _ _ _ first2 pass2 expire2 bcount2 _ <<<"$entry"
+    say "after restart: $entry"
+    [ "$first2" = "$first" ] || die "tuple was recreated: first changed $first -> $first2"
+    [ "$bcount2" -gt "$bcount" ] || die "bcount did not grow across the restart ($bcount -> $bcount2)"
+    [ "$pass2" -lt "$expire2" ] || die "retry after pass_time did not mark the tuple for whitelisting (pass=$pass2 expire=$expire2)"
+
+    # The greylister's periodic scan re-keys the passed tuple as a WHITE
+    # address entry. Poll while greyd runs (greydb reads retry on a busy
+    # database) rather than assume the first scan finished within a fixed
+    # sleep.
+    start_greyd "$conf"
+    white_present() { run_greydb_conf "$conf" 2>/dev/null | grep -q "^WHITE|$RESTART_SRC|"; }
+    WAIT=$((RESTART_PASS_TIME + 20)) wait_for "WHITE|$RESTART_SRC from the scan" white_present         || die "WHITE|$RESTART_SRC not created by the scan after the restart"
+    if run_greydb_conf "$conf" 2>/dev/null | grep -q -- "$key"; then
+        stop_greyd
+        die "GREY tuple still present after being whitelisted"
+    fi
+    stop_greyd
+    [ "$GREYD_RC" -eq 0 ] || die "greyd exited with status $GREYD_RC on the third SIGTERM"
+}
 
 # --- 1. environment ----------------------------------------------------------
 
 step "environment"
-[ "$(id -u)" -eq 0 ] || die "must run as root (use docker run --privileged)"
-
-missing=
-for t in iptables ipset conntrack python3; do
-    command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
-done
-if [ -n "$missing" ]; then
-    if command -v apt-get >/dev/null 2>&1; then
-        say "installing:$missing"
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update -qq
-        apt-get install -y -qq --no-install-recommends iptables ipset conntrack python3 iproute2 procps >/dev/null
-    else
-        die "missing tools:$missing"
-    fi
-fi
-
-# Debian's iptables defaults to the nf_tables backend; fall back to the
-# legacy one when the kernel does not offer nf_tables inside this namespace.
-if ! iptables -t nat -L -n >/dev/null 2>&1; then
-    if command -v update-alternatives >/dev/null 2>&1 && [ -x /usr/sbin/iptables-legacy ]; then
-        say "nf_tables backend unusable, switching to iptables-legacy"
-        update-alternatives --set iptables /usr/sbin/iptables-legacy >/dev/null
-    fi
-    iptables -t nat -L -n >/dev/null 2>&1 || die "iptables nat table not usable (missing CAP_NET_ADMIN?)"
-fi
-ipset list -n >/dev/null 2>&1 || die "ipset not usable (missing CAP_NET_ADMIN?)"
+it_check_environment
 pass "root with iptables, ipset, conntrack and python3 available"
 
 # --- 2. programs -------------------------------------------------------------
 
 step "programs"
-if [ ! -x "$BIN/greyd" ] || [ ! -x "$BIN/greydb" ] || [ ! -x "$BIN/greyd-setup" ] || [ ! -x "$BIN/greylogd" ]; then
-    say "building into $BIN"
-    mkdir -p "$BIN"
-    for p in greyd greydb greyd-setup greylogd; do
-        (cd "$SRC" && CGO_ENABLED=0 go build -trimpath -o "$BIN/$p" "./cmd/$p")
-    done
-fi
-"$BIN/greyd" --version
-"$BIN/greyd" --drivers | grep -q netfilter || die "netfilter firewall driver not compiled in"
-"$BIN/greyd" --drivers | grep -q sqlite || die "sqlite database driver not compiled in"
-pass "programs present with netfilter and sqlite drivers"
+it_check_programs
+pass "programs present with netfilter, sqlite and bolt drivers"
 
 # --- 3. users, directories, configuration ------------------------------------
 
 step "users, directories and configuration"
-for u in greyd greydb; do
-    getent group "$u" >/dev/null || groupadd -r "$u"
-    id "$u" >/dev/null 2>&1 || useradd -r -g "$u" -d /var/empty -s /usr/sbin/nologin "$u"
-done
-install -d -m 0755 "$ETC" "$RUN" "$LOGDIR" "$CHROOT" /var/empty
-install -d -m 0700 -o greydb -g greydb "$LIB"
-rm -f "$LOG" "$LOGDIR"/*.stderr "$LIB"/greyd.sqlite* "$SOCK"
-remove_rules
-
-cat >"$CONF" <<EOF
-#
-# greyd integration harness configuration (generated by run-linux.sh).
-#
-debug = 1
-verbose = 1
-daemonize = 0
-syslog_enable = 0
-log_to_file = "$LOG"
-
-user = "greyd"
-drop_privs = $DROP_PRIVS
-chroot = 1
-chroot_dir = "$CHROOT"
-sandbox = 1
-
-hostname = "greyd-integration"
-bind_address = "127.0.0.1"
-port = $SMTP_PORT
-config_socket = "$SOCK"
-greyd_pidfile = "$CHROOT/greyd.pid"
-greylogd_pidfile = "$RUN/greylogd.pid"
-
-# No tarpitting: the harness reads whole dialogues.
-stutter = 0
-banner = "greyd integration harness"
-error_code = "450"
-
-section firewall {
-    driver         = "netfilter"
-    track_outbound = 1
-    inbound_group  = $IN_GROUP
-    outbound_group = $OUT_GROUP
-}
-
-section database {
-    driver  = "sqlite"
-    path    = "$LIB"
-    db_name = "greyd.sqlite"
-}
-
-section grey {
-    enable              = 1
-    user                = "greydb"
-    traplist_name       = "greyd-greytrap"
-    traplist_message    = "Your address %A has mailed to spamtraps here"
-    whitelist_name      = "$WHITELIST_SET"
-    whitelist_name_ipv6 = "$WHITELIST_SET-ipv6"
-    low_prio_mx         = "$LOW_PRIO_MX"
-    stutter             = 0
-    pass_time           = 600
-}
-
-# SPF lookups would need DNS and could trap the test sender.
-section spf {
-    enable = 0
-}
-
-section sync {
-    enable = 0
-}
-
-section setup {
-    lists = [ "integration" ]
-}
-
-blacklist integration {
-    message = "Your address %A is in the integration test list"
-    method  = "file"
-    file    = "$BLACKLIST_FILE"
-}
-EOF
-chmod 0644 "$CONF"
+it_setup_users_dirs
+write_config "$CONF"
 "$BIN/greyd" -t -f "$CONF" | tee "$LOGDIR/greyd-t.out"
 grep -q "configuration OK" "$LOGDIR/greyd-t.out" || die "greyd -t did not accept the configuration"
 pass "configuration accepted by greyd -t"
@@ -351,23 +237,7 @@ pass "configuration accepted by greyd -t"
 # --- 4. firewall rules -------------------------------------------------------
 
 step "iptables rules"
-iptables -t nat -N "$NAT_CHAIN"
-iptables -t nat -A OUTPUT -o lo -j "$NAT_CHAIN"
-# Locally generated connections to loopback port 2525 land on greyd; the
-# fw process must recover the original destination from conntrack.
-iptables -t nat -A "$NAT_CHAIN" -p tcp --dport "$DNAT_PORT" -j DNAT --to-destination "127.0.0.1:$SMTP_PORT"
-
-iptables -N "$OUT_CHAIN"
-iptables -A OUTPUT -o lo -j "$OUT_CHAIN"
-# Outbound SMTP: greylogd whitelists the destination (outbound group).
-iptables -A "$OUT_CHAIN" -p tcp --dport 25 -m conntrack --ctstate NEW -j NFLOG --nflog-group "$OUT_GROUP"
-
-iptables -N "$IN_CHAIN"
-iptables -A INPUT -i lo -j "$IN_CHAIN"
-# Inbound SMTP: greylogd whitelists the source (inbound group). Production
-# rules sit in PREROUTING behind a greyd-whitelist match; loopback traffic
-# only traverses INPUT.
-iptables -A "$IN_CHAIN" -p tcp --dport 25 -m conntrack --ctstate NEW -j NFLOG --nflog-group "$IN_GROUP"
+it_install_rules
 iptables -t nat -S "$NAT_CHAIN"
 iptables -S "$OUT_CHAIN" "$IN_CHAIN" 2>/dev/null || { iptables -S "$OUT_CHAIN"; iptables -S "$IN_CHAIN"; }
 pass "DNAT $DNAT_PORT->$SMTP_PORT and NFLOG groups $IN_GROUP/$OUT_GROUP installed"
@@ -383,36 +253,46 @@ pass "WHITE|$PRELOAD_WHITE stored in the sqlite database owned by greydb"
 # --- 6. start greyd ----------------------------------------------------------
 
 step "start greyd -F"
-"$BIN/greyd" -F -f "$CONF" >"$LOGDIR/greyd.stderr" 2>&1 &
-GREYD_PID=$!
-GREYD_START=$SECONDS
-wait_for "greyd listening" log_has "listening for incoming connections" \
-    || die "greyd did not start listening (pid $GREYD_PID alive: $(is_alive "$GREYD_PID" && echo yes || echo no))"
-is_alive "$GREYD_PID" || die "greyd exited right after start"
-[ -S "$SOCK" ] || die "configuration socket $SOCK was not created"
-# The three processes of the privilege separation.
-if [ "$DROP_PRIVS" = 1 ]; then
-    MAIN_USER=greyd; GREY_USER=greydb
-else
-    MAIN_USER=root; GREY_USER=root
-fi
-wait_for "fw and grey children" bash -c "[ \$(ps -eo user,args | grep -v grep | grep -c '^$GREY_USER .*$BIN/greyd ') -ge 1 ] && [ \$(ps -eo user,args | grep -v grep | grep -c '^$MAIN_USER .*$BIN/greyd ') -ge 2 ]" \
-    || die "expected the main and firewall processes as $MAIN_USER and the greylister as $GREY_USER"
-ps -eo pid,user,args | grep -E '[g]reyd' || true
-pass "greyd is up: main + firewall processes as $MAIN_USER, greylister as $GREY_USER, config socket $SOCK"
+start_greyd "$CONF"
+ps -eo pid,ppid,user,args | grep -E '[g]reyd' || true
+pass "greyd is up: main $GREYD_PID + firewall $FW_PID as $MAIN_USER, greylister $GREY_PID as $GREY_USER, config socket $SOCK"
 
 # --- 7. start greylogd -------------------------------------------------------
 
 step "start greylogd"
-"$BIN/greylogd" -f "$CONF" >"$LOGDIR/greylogd.stderr" 2>&1 &
-GREYLOGD_PID=$!
-wait_for "greylogd pidfile" test -s "$RUN/greylogd.pid" || die "greylogd did not write its pidfile"
-sleep 1
-is_alive "$GREYLOGD_PID" || die "greylogd exited right after start"
-[ "$(ps -o user= -p "$GREYLOGD_PID" | tr -d ' ')" = "$GREY_USER" ] || die "greylogd is not running as $GREY_USER"
+start_greylogd
 pass "greylogd running as $GREY_USER, NFLOG groups bound"
 
-# --- 8. greylisting through the DNAT'd port ----------------------------------
+# --- 8. privilege audit ------------------------------------------------------
+
+step "privilege audit (/proc/PID/status of all four processes)"
+if [ "$DROP_PRIVS" = 1 ]; then
+    # CAP_NET_ADMIN is bit 12 = 0x1000.
+    it_audit_process "main"       "$GREYD_PID"    greyd  0    "$CHROOT"
+    it_audit_process "firewall"   "$FW_PID"       greyd  1000 "$CHROOT"
+    it_audit_process "greylister" "$GREY_PID"     greydb 0    ""
+    it_audit_process "greylogd"   "$GREYLOGD_PID" greydb 1000 ""
+    pass "uid/gid, NoNewPrivs=1, Seccomp=2, CapEff (0 / CAP_NET_ADMIN only) and chroot as expected"
+else
+    say "SKIP: GREYD_IT_DROP_PRIVS=0, every process is root"
+fi
+
+# --- 9. sandbox enforcement --------------------------------------------------
+
+step "sandbox enforcement (greyd --sandbox-probe per role)"
+# The probe logs to stderr: the harness log belongs to root and an
+# unwritable log_to_file makes the probe fail.
+write_config "$PROBE_CONF" log_to_file=none
+CONFINED="read-etc-passwd=denied list-root=denied write-tmp=denied exec=denied tcp-connect=denied mount=denied chroot=denied setuid-root=denied init-module=denied"
+# shellcheck disable=SC2086
+probe_role main greyd $CONFINED
+# shellcheck disable=SC2086
+probe_role firewall greyd $CONFINED
+probe_role grey greydb read-allowed=ok write-allowed=ok read-etc-passwd=ok \
+    write-tmp=denied exec=denied tcp-connect=denied mount=denied chroot=denied setuid-root=denied init-module=denied
+pass "main/firewall deny filesystem, exec, network, mount, chroot, setuid, init-module; grey reads /etc and writes $LIB only"
+
+# --- 10. greylisting through the DNAT'd port ---------------------------------
 
 step "greylisted SMTP dialogue via 127.0.0.1:$DNAT_PORT (DNAT to $SMTP_PORT)"
 smtp 127.0.0.1 127.0.0.1 "$DNAT_PORT" 451 "Temporary failure" || die "expected a 451 greylist reply"
@@ -424,7 +304,7 @@ fi
 conntrack -L 2>/dev/null | grep -q "dport=$DNAT_PORT" || die "no conntrack entry for the DNAT'd connection"
 pass "451 reply, GREY|127.0.0.1|... recorded, conntrack shows the DNAT'd flow and no lookup failures were logged"
 
-# --- 9. whitelist pushed to ipset by the greylister scanner ------------------
+# --- 11. whitelist pushed to ipset by the greylister scanner -----------------
 
 step "whitelist entry reaches ipset $WHITELIST_SET"
 wait_for "$PRELOAD_WHITE in ipset" ipset test "$WHITELIST_SET" "$PRELOAD_WHITE" \
@@ -432,7 +312,7 @@ wait_for "$PRELOAD_WHITE in ipset" ipset test "$WHITELIST_SET" "$PRELOAD_WHITE" 
 ipset list "$WHITELIST_SET" | sed -n '1,12p'
 pass "ipset $WHITELIST_SET contains $PRELOAD_WHITE (pushed by the greylister through the firewall process)"
 
-# --- 10. greylogd via NFLOG --------------------------------------------------
+# --- 12. greylogd via NFLOG --------------------------------------------------
 
 step "greylogd whitelists addresses seen by NFLOG"
 # A SYN from $NFLOG_SRC to $NFLOG_DST:25 (nothing listens; the SYN is what
@@ -454,7 +334,25 @@ wait_for "WHITE|$NFLOG_SRC (inbound group)" db_has "^WHITE|$NFLOG_SRC|" \
     || die "greylogd did not whitelist the inbound source $NFLOG_SRC"
 pass "greylogd whitelisted $NFLOG_DST (outbound group $OUT_GROUP) and $NFLOG_SRC (inbound group $IN_GROUP)"
 
-# --- 11. after the low priority MX grace period -----------------------------
+# --- 13. throughput and latency SLO ------------------------------------------
+
+step "throughput and latency SLO: $LOAD_COUNT concurrent greylisted dialogues"
+SLO_JSON=$LOGDIR/slo.json
+python3 "$HERE/loadgen.py" --port "$DNAT_PORT" --count "$LOAD_COUNT" --concurrency "$LOAD_COUNT" \
+    --prefix slo --timeout 30 --json "$SLO_JSON" 2>&1 | tee "$LOGDIR/loadgen-slo.out"
+[ "${PIPESTATUS[0]}" -eq 0 ] || die "not every dialogue got a 451 (see above)"
+read -r P50 P99 TPUT LAST_OK <<<"$(python3 -c '
+import json, sys
+s = json.load(open(sys.argv[1]))
+print("%.3f %.3f %.1f %.3f" % (s["p50_seconds"], s["p99_seconds"], s["throughput_per_second"], s["last_ok_epoch"]))' "$SLO_JSON")"
+float_lt "$P99" "$SLO_P99" || die "p99 time-to-451 is ${P99}s, SLO is under ${SLO_P99}s"
+WAIT=$SLO_DB_WINDOW WAIT_STEP=0.2 wait_for "$LOAD_COUNT slo tuples in greydb" db_count_at_least "^GREY|127.0.0.1|slo-" "$LOAD_COUNT" \
+    || die "only $(db_count '^GREY|127.0.0.1|slo-') of $LOAD_COUNT GREY tuples reached the database within ${SLO_DB_WINDOW}s"
+INSERT_LAG=$(fmath "$(now_f) - $LAST_OK")
+say "greylister insert lag (last 451 -> last tuple visible in greydb, includes 0.2s polling): ${INSERT_LAG}s"
+pass "p50=${P50}s p99=${P99}s (SLO < ${SLO_P99}s) throughput=${TPUT}/s, all $LOAD_COUNT tuples stored, insert lag ${INSERT_LAG}s"
+
+# --- 14. after the low priority MX grace period ------------------------------
 
 step "wait for the low priority MX grace period (${LOW_PRIO_GRACE}s after start)"
 remaining=$((GREYD_START + LOW_PRIO_GRACE + 5 - SECONDS))
@@ -484,13 +382,13 @@ step "trapped address gets the traplist rejection (after the next scanner pass)"
 # The greylister hands its traplist to greyd on every scan, so this can
 # take up to one scan interval (grey.ScanInterval, 60s); poll slowly to
 # keep the log readable.
-WAIT=$((LOW_PRIO_GRACE + 15)) WAIT_STEP=3 wait_for "450 traplist reply" smtp_quiet "$TRAP_SRC" 127.0.0.1 "$DNAT_PORT" 450 "has mailed to spamtraps here" \
+WAIT=$((SCAN_INTERVAL + 15)) WAIT_STEP=3 wait_for "450 traplist reply" smtp_quiet "$TRAP_SRC" 127.0.0.1 "$DNAT_PORT" 450 "has mailed to spamtraps here" \
     || die "$TRAP_SRC did not receive the greyd-greytrap message within a scan interval"
 smtp "$TRAP_SRC" 127.0.0.1 "$DNAT_PORT" 450 "Your address $TRAP_SRC has mailed to spamtraps here" \
     || die "traplist message did not expand %A to $TRAP_SRC"
 pass "450 'Your address $TRAP_SRC has mailed to spamtraps here' (traplist sent by the greylister scan to greyd)"
 
-# --- 12. blacklist via greyd-setup and the unix configuration socket ---------
+# --- 18. blacklist via greyd-setup and the unix configuration socket ---------
 
 step "push a blacklist with greyd-setup over $SOCK"
 printf '# integration harness blacklist\n127.0.0.0/8\n' >"$BLACKLIST_FILE"
@@ -501,23 +399,97 @@ smtp 127.0.0.1 127.0.0.1 "$DNAT_PORT" 450 "Your address 127.0.0.1 is in the inte
     || die "blacklist message did not expand %A to 127.0.0.1"
 pass "blacklist 127.0.0.0/8 applied: 450 'Your address 127.0.0.1 is in the integration test list'"
 
-# --- 13. clean shutdown ------------------------------------------------------
+# --- 19. large firewall sets -------------------------------------------------
+
+step "large firewall sets: $BLACK_COUNT blacklist entries via greyd-setup -b, $WHITE_COUNT whitelist entries via greydb"
+# Half /24s, half /32s, none adjacent or nested (odd third/fourth octets),
+# so the count after CIDR collapsing equals the number of lines; the
+# expected count is nevertheless computed from the file.
+python3 - "$BIG_BLACKLIST_FILE" "$BLACK_COUNT" <<'EOF'
+import sys
+path, n = sys.argv[1], int(sys.argv[2])
+half = n // 2
+with open(path, "w") as f:
+    f.write("# integration harness large blacklist\n")
+    for i in range(half):
+        r = i % 32768
+        f.write("%d.%d.%d.0/24\n" % (10 + i // 32768, r // 128, (r % 128) * 2 + 1))
+    for i in range(n - half):
+        r = i % 32768
+        f.write("172.%d.%d.%d\n" % (16 + i // 32768, r // 128, (r % 128) * 2 + 1))
+EOF
+EXPECTED_BLACK=$(python3 -c '
+import ipaddress, sys
+nets = [ipaddress.ip_network(l.strip()) for l in open(sys.argv[1]) if l.strip() and not l.startswith("#")]
+print(len(list(ipaddress.collapse_addresses(nets))))' "$BIG_BLACKLIST_FILE")
+write_config "$BIG_CONF" lists=big list_file="$BIG_BLACKLIST_FILE" list_message="Your address %A is in the big list"
+T0=$(now_f)
+"$BIN/greyd-setup" -b -d -f "$BIG_CONF" 2>&1 | tail -n 5 | tee "$LOGDIR/greyd-setup-big.out"
+[ "${PIPESTATUS[0]}" -eq 0 ] || die "greyd-setup -b failed"
+BLACK_SECS=$(elapsed_since "$T0")
+BLACK_IN_SET=$(ipset_entries "$BLACKLIST_SET")
+say "greyd-setup -b took ${BLACK_SECS}s; ipset $BLACKLIST_SET: $BLACK_IN_SET entries ($(ipset list "$BLACKLIST_SET" | wc -l) lines), expected $EXPECTED_BLACK after collapsing"
+float_lt "$BLACK_SECS" 60 || die "greyd-setup -b took ${BLACK_SECS}s, expected under 60s"
+[ "$BLACK_IN_SET" = "$EXPECTED_BLACK" ] || die "ipset $BLACKLIST_SET holds $BLACK_IN_SET entries, expected $EXPECTED_BLACK"
+ipset test "$BLACKLIST_SET" 10.0.1.7 >/dev/null 2>&1 || die "10.0.1.7 (inside 10.0.1.0/24) not matched by $BLACKLIST_SET"
+
+# Whitelist path: greydb -> database -> greylister scan -> firewall
+# process -> ipset. Odd host octets again so nothing collapses.
+WHITE_KEYS=$(python3 -c 'import sys; n = int(sys.argv[1]); print(" ".join("192.168.%d.%d" % ((i // 128) % 256, (i % 128) * 2 + 1) for i in range(n)))' "$WHITE_COUNT")
+WHITE_BASE=$(ipset_entries "$WHITELIST_SET")
+T0=$(now_f)
+# shellcheck disable=SC2086
+run_greydb -a $WHITE_KEYS
+GREYDB_SECS=$(elapsed_since "$T0")
+say "greydb -a with $WHITE_COUNT keys took ${GREYDB_SECS}s (one transaction per key)"
+[ "$(db_count '^WHITE|192.168.')" -ge "$WHITE_COUNT" ] || die "greydb lists $(db_count '^WHITE|192.168.') WHITE 192.168.* entries, expected $WHITE_COUNT"
+T1=$(now_f)
+WAIT=90 WAIT_STEP=1 wait_for "$WHITE_COUNT more entries in $WHITELIST_SET" ipset_entries_at_least "$WHITELIST_SET" $((WHITE_BASE + WHITE_COUNT)) \
+    || die "ipset $WHITELIST_SET has $(ipset_entries "$WHITELIST_SET") entries, expected at least $((WHITE_BASE + WHITE_COUNT)) within 90s of greydb finishing"
+WHITE_SECS=$(elapsed_since "$T1")
+ipset test "$WHITELIST_SET" 192.168.0.1 >/dev/null 2>&1 || die "192.168.0.1 not in $WHITELIST_SET"
+say "whitelist entries visible in ipset ${WHITE_SECS}s after greydb finished (scan interval ${SCAN_INTERVAL}s)"
+pass "blacklist: $BLACK_IN_SET entries in ${BLACK_SECS}s (< 60s); whitelist: $WHITE_COUNT entries in ipset ${WHITE_SECS}s after greydb (< 90s; greydb itself ${GREYDB_SECS}s)"
+
+# --- 20/21. chaos on the pipes -----------------------------------------------
+
+step "chaos: SIGKILL the firewall child with a connection open"
+chaos_kill firewall
+pass "parent logged the firewall child's exit, exited 0 within 5s, removed the pidfile, no greyd processes left"
+start_greyd "$CONF"
+say "greyd restarted: main $GREYD_PID, firewall $FW_PID, greylister $GREY_PID"
+
+step "chaos: SIGKILL the greylister child with a connection open"
+chaos_kill greylister
+pass "parent logged the greylister child's exit, exited 0 within 5s, removed the pidfile, no greyd processes left"
+
+# --- 22. restart mid-traffic with persistence (sqlite) -----------------------
+
+step "restart mid-traffic with persistence (sqlite, pass_time ${RESTART_PASS_TIME}s)"
+write_config "$RESTART_CONF" pass_time=$RESTART_PASS_TIME
+start_greyd "$RESTART_CONF"
+restart_persistence "$RESTART_CONF" sqlite
+pass "sqlite: GREY tuple kept first/bcount across SIGTERM+restart, marked at pass_time and whitelisted by the next start-up scan"
+start_greyd "$RESTART_CONF"
+
+# --- 23. clean shutdown ------------------------------------------------------
 
 step "clean shutdown on SIGTERM"
-kill -TERM "$GREYLOGD_PID"
-set +e
-wait "$GREYLOGD_PID"; rc_logd=$?
-set -e
-[ "$rc_logd" -eq 0 ] || die "greylogd exited with status $rc_logd"
-kill -TERM "$GREYD_PID"
-set +e
-wait "$GREYD_PID"; rc_greyd=$?
-set -e
-[ "$rc_greyd" -eq 0 ] || die "greyd exited with status $rc_greyd"
-wait_for "child processes gone" bash -c "! ps -eo args | grep -v grep | grep -q '^$BIN/greyd '" \
-    || die "greyd child processes survived the parent"
-GREYD_PID=; GREYLOGD_PID=
+stop_greylogd
+[ "$GREYLOGD_RC" -eq 0 ] || die "greylogd exited with status $GREYLOGD_RC"
+stop_greyd
+[ "$GREYD_RC" -eq 0 ] || die "greyd exited with status $GREYD_RC"
 pass "greyd and greylogd exited 0 and left no child processes"
+
+# --- 24. restart mid-traffic with persistence (bolt) -------------------------
+
+step "restart mid-traffic with persistence (bolt driver, pass_time ${RESTART_PASS_TIME}s)"
+write_config "$BOLT_CONF" driver=bolt db_name=greyd.db pass_time=$RESTART_PASS_TIME
+"$BIN/greyd" -t -f "$BOLT_CONF" | grep -q "configuration OK" || die "greyd -t did not accept the bolt configuration"
+start_greyd "$BOLT_CONF"
+restart_persistence "$BOLT_CONF" bolt
+[ "$(stat -c %U "$LIB/greyd.db")" = greydb ] || die "bolt database file is not owned by greydb"
+pass "bolt: GREY tuple kept first/bcount across SIGTERM+restart, marked at pass_time and whitelisted by the next start-up scan"
 
 say ""
 say "ALL PASS ($STEP steps)"

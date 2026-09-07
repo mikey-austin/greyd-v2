@@ -240,3 +240,34 @@ func TestSyncDisabled(t *testing.T) {
 		t.Fatalf("code %d, stderr %q", code, stderr)
 	}
 }
+
+// TestBatchedUpdates: many keys go into few transactions, a bad key in the
+// middle is reported without affecting the others, and the exit status
+// counts the failures.
+func TestBatchedUpdates(t *testing.T) {
+	conf := writeConfig(t, "")
+	keys := make([]string, 0, 2*updateBatch+3)
+	for i := 0; i < 2*updateBatch+2; i++ {
+		keys = append(keys, fmt.Sprintf("10.%d.%d.%d", i>>16&255, i>>8&255, i&255))
+	}
+	keys = append(keys[:updateBatch+1], append([]string{"not-an-address"}, keys[updateBatch+1:]...)...)
+	var out, errb strings.Builder
+	rc := Run(append([]string{"-f", conf, "-a"}, keys...), &out, &errb)
+	if rc != 1 || !strings.Contains(errb.String(), "Invalid IP address not-an-address") {
+		t.Fatalf("rc=%d stderr=%q", rc, errb.String())
+	}
+	out.Reset()
+	if rc := Run([]string{"-f", conf, "-s"}, &out, &errb); rc != 0 || !strings.Contains(out.String(), fmt.Sprintf("WHITE\t%d\n", 2*updateBatch+2)) {
+		t.Fatalf("summary rc=%d out=%q", rc, out.String())
+	}
+	// Deleting a missing key among present ones fails only that key.
+	errb.Reset()
+	if rc := Run([]string{"-f", conf, "-d", "10.0.0.1", "10.99.99.99", "10.0.0.2"}, &out, &errb); rc != 1 || !strings.Contains(errb.String(), "No entry for 10.99.99.99") {
+		t.Fatalf("delete rc=%d stderr=%q", rc, errb.String())
+	}
+	out.Reset()
+	_ = Run([]string{"-f", conf, "-s"}, &out, &errb)
+	if !strings.Contains(out.String(), fmt.Sprintf("WHITE\t%d\n", 2*updateBatch)) {
+		t.Fatalf("after delete: %q", out.String())
+	}
+}
