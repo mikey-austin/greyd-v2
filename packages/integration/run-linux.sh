@@ -466,7 +466,11 @@ pass "parent logged the greylister child's exit, exited 0 within 5s, removed the
 # --- 22. restart mid-traffic with persistence (sqlite) -----------------------
 
 step "restart mid-traffic with persistence (sqlite, pass_time ${RESTART_PASS_TIME}s)"
-write_config "$RESTART_CONF" pass_time=$RESTART_PASS_TIME
+# A dedicated, empty database isolates this test from the main run's 20k
+# entries: the start-up scan is instant and the greydb poll reads are
+# cheap, so the tuple is whitelisted well within the scan interval.
+rm -f "$LIB"/restart.sqlite*
+write_config "$RESTART_CONF" db_name=restart.sqlite pass_time=$RESTART_PASS_TIME
 start_greyd "$RESTART_CONF"
 restart_persistence "$RESTART_CONF" sqlite
 pass "sqlite: GREY tuple kept first/bcount across SIGTERM+restart, marked at pass_time and whitelisted by the next start-up scan"
@@ -484,11 +488,12 @@ pass "greyd and greylogd exited 0 and left no child processes"
 # --- 24. restart mid-traffic with persistence (bolt) -------------------------
 
 step "restart mid-traffic with persistence (bolt driver, pass_time ${RESTART_PASS_TIME}s)"
-write_config "$BOLT_CONF" driver=bolt db_name=greyd.db pass_time=$RESTART_PASS_TIME
+rm -f "$LIB"/restart.db*
+write_config "$BOLT_CONF" driver=bolt db_name=restart.db pass_time=$RESTART_PASS_TIME
 "$BIN/greyd" -t -f "$BOLT_CONF" | grep -q "configuration OK" || die "greyd -t did not accept the bolt configuration"
 start_greyd "$BOLT_CONF"
 restart_persistence "$BOLT_CONF" bolt
-[ "$(stat -c %U "$LIB/greyd.db")" = greydb ] || die "bolt database file is not owned by greydb"
+[ "$(stat -c %U "$LIB/restart.db")" = greydb ] || die "bolt database file is not owned by greydb"
 pass "bolt: GREY tuple kept first/bcount across SIGTERM+restart, marked at pass_time and whitelisted by the next start-up scan"
 
 say ""
