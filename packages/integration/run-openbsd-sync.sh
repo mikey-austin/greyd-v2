@@ -39,6 +39,9 @@ CONF=$ETC/greyd-sync.conf
 SOCK=$RUNDIR/sync-config.sock
 LOG=$LOGDIR/greyd-sync.log
 KEY=/etc/mail/spamd.key
+# spamd is a daemon in libexec, not on the PATH.
+SPAMD=${SPAMD:-/usr/libexec/spamd}
+SPAMDB=${SPAMDB:-/usr/sbin/spamdb}
 
 GREYD_ADDR=127.0.0.2
 SPAMD_ADDR=127.0.0.1
@@ -59,7 +62,7 @@ pass() { say "PASS: $*"; }
 is_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 run_greydb() { su greydb -c "\"$BIN/greydb\" -f \"$CONF\" $*"; }
 greydb_has() { run_greydb 2>/dev/null | grep -q -- "$1"; }
-spamdb_has() { spamdb 2>/dev/null | grep -q -- "$1"; }
+spamdb_has() { "$SPAMDB" 2>/dev/null | grep -q -- "$1"; }
 
 dump_state() {
     say ""
@@ -69,7 +72,7 @@ dump_state() {
     say "--- $LOG (tail) ---";     tail -n 150 "$LOG" 2>/dev/null || true
     say "--- greyd stderr ---";    tail -n 40 "$LOGDIR/greyd-sync.stderr" 2>/dev/null || true
     say "--- spamd output ---";    tail -n 80 "$LOGDIR/spamd.out" 2>/dev/null || true
-    say "--- spamdb ---";          spamdb 2>&1 || true
+    say "--- spamdb ---";          "$SPAMDB" 2>&1 || true
     say "--- greydb ---";          run_greydb 2>&1 || true
     say "--- sockets ---";         netstat -an -f inet 2>/dev/null | grep -E '8025|18025' || true
     say "--- processes ---";       ps -axo pid,user,command | grep -E '[g]reyd|[s]pamd' || true
@@ -137,11 +140,11 @@ trap cleanup EXIT
 step "environment"
 [ "$(id -u)" -eq 0 ] || die "must run as root"
 [ "$(uname -s)" = OpenBSD ] || die "this script is for OpenBSD (got $(uname -s))"
-command -v spamd >/dev/null 2>&1 || die "spamd not found (it is part of the OpenBSD base system)"
-command -v spamdb >/dev/null 2>&1 || die "spamdb not found"
+[ -x "$SPAMD" ] || die "$SPAMD not found (spamd is part of the OpenBSD base system)"
+[ -x "$SPAMDB" ] || die "$SPAMDB not found"
 command -v nc >/dev/null 2>&1 || die "nc not available"
 pgrep -x spamd >/dev/null 2>&1 && die "a spamd is already running; stop it first"
-pass "OpenBSD $(uname -r): spamd $(ls -l "$(command -v spamd)" | awk '{print $5}') bytes, nc present"
+pass "OpenBSD $(uname -r): $SPAMD and $SPAMDB present"
 
 # --- 2. programs -------------------------------------------------------------
 
@@ -188,7 +191,7 @@ if ! ifconfig lo0 | grep -q "inet $GREYD_ADDR "; then
 fi
 
 # spamdb keeps state in /var/db/spamd across runs: start from a clean slate.
-for ip in $WHITE_IP $TRAP_IP; do spamdb -d "$ip" 2>/dev/null || true; done
+for ip in $WHITE_IP $TRAP_IP; do "$SPAMDB" -d "$ip" 2>/dev/null || true; done
 
 cat >"$CONF" <<EOF
 #
@@ -249,7 +252,7 @@ pass "key $KEY shared, alias $GREYD_ADDR on lo0, configuration accepted"
 step "start spamd (greylisting, -y lo0 -Y $GREYD_ADDR, SMTP on $SPAMD_ADDR:$SPAMD_SMTP)"
 # -d keeps spamd in the foreground; -S 0 disables the stutter for greylisted
 # connections so the dialogue completes quickly; -G shortens the times.
-spamd -d -G 2:4:864 -S 0 -l "$SPAMD_ADDR" -p "$SPAMD_SMTP" -y lo0 -Y "$GREYD_ADDR" -n "spamd sync test" \
+"$SPAMD" -d -G 2:4:864 -S 0 -l "$SPAMD_ADDR" -p "$SPAMD_SMTP" -y lo0 -Y "$GREYD_ADDR" -n "spamd sync test" \
     >"$LOGDIR/spamd.out" 2>&1 &
 SPAMD_PID=$!
 wait_for "spamd SMTP listener" sh -c "netstat -an -f inet | grep -q '$SPAMD_ADDR.$SPAMD_SMTP.*LISTEN'" \
