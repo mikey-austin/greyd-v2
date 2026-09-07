@@ -119,6 +119,7 @@ stop_pid() {
         while is_alive "$pid" && [ "$i" -lt 50 ]; do sleep 0.2; i=$((i + 1)); done
         is_alive "$pid" && kill -KILL "$pid" 2>/dev/null
     fi
+    return 0
 }
 
 cleanup() {

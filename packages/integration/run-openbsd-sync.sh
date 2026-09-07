@@ -314,7 +314,8 @@ pass "greydb lists GREY|...|s2g.example.test|... sent by spamd"
 step "both daemons survived and stop cleanly"
 is_alive "$GREYD_PID" || die "greyd died during the test"
 is_alive "$SPAMD_PID" || die "spamd died during the test"
-grep -qi "pledge" "$LOGDIR/greyd-sync.stderr" && die "pledge violation reported"
+# A pledge violation kills the process and leaves a kernel log line.
+dmesg | grep -q "greyd.*pledge" && die "pledge violation reported in dmesg"
 kill -TERM "$GREYD_PID"
 i=0; while is_alive "$GREYD_PID" && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
 is_alive "$GREYD_PID" && die "greyd did not exit on SIGTERM"
