@@ -1,20 +1,18 @@
 module github.com/mikey-austin/greyd-v2
 
-go 1.25.0
-
-toolchain go1.25.13
+go 1.26.0
 
 require (
 	blitiri.com.ar/go/spf v1.6.0
 	github.com/antlr4-go/antlr/v4 v4.13.1
 	github.com/florianl/go-nflog/v2 v2.3.0
 	github.com/go-sql-driver/mysql v1.10.1
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/ti-mo/conntrack v0.6.0
 	github.com/vishvananda/netlink v1.3.1
 	go.etcd.io/bbolt v1.5.0
-	golang.org/x/net v0.58.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/net v0.59.0
+	golang.org/x/sys v0.48.0
 	kernel.org/pub/linux/libs/security/libcap/cap v1.2.78
 	modernc.org/sqlite v1.58.0
 )
@@ -36,8 +34,8 @@ require (
 	github.com/ti-mo/netfilter v0.5.3 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
-	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	kernel.org/pub/linux/libs/security/libcap/psx v1.2.78 // indirect
 	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
