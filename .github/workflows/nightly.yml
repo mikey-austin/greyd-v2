@@ -22,12 +22,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: soak
         run: make test-soak SOAK_MINUTES=${{ github.event.inputs.minutes || '30' }}
       - name: upload samples
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: soak-samples-${{ github.run_id }}
           path: soak.csv
